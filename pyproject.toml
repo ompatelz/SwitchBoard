@@ -15,10 +15,15 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Typing :: Typed",
 ]
-dependencies = []
+dependencies = [
+  "fastapi>=0.115,<1",
+  "pydantic>=2.10,<3",
+  "uvicorn>=0.34,<1",
+]
 
 [dependency-groups]
 dev = [
+  "httpx2>=2,<3",
   "mypy>=1.15,<2",
   "pytest>=8.3,<10",
   "ruff>=0.11,<1",
@@ -29,6 +34,7 @@ packages = ["src/switchboard"]
 
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers", "-ra"]
+filterwarnings = ["error"]
 testpaths = ["tests"]
 
 [tool.ruff]

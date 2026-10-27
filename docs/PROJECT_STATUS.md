@@ -3,7 +3,7 @@
 ## Current phase
 
 - **Phase:** 0 — Product specification and repository skeleton
-- **Subphase:** 0A — Repository contract and development foundation
+- **Subphase:** 0B — Minimal gateway and deterministic mock provider
 - **State:** Complete and locally verified; GitHub-hosted CI is pending a future push
 - **Updated:** 2026-10-27 (Asia/Calcutta)
 
@@ -15,6 +15,11 @@
 - Ruff, strict mypy, pytest, and package-build checks have shared local commands and GitHub Actions CI.
 - The owner-supplied project build contract is versioned as `docs/BUILD_CONTRACT.md`.
 - Documentation distinguishes implemented foundation work from planned gateway behavior.
+- Gateway application factory with `GET /healthz`.
+- Separate mock-provider application factory with `GET /healthz` and `POST /generate`.
+- Deterministic SHA-256-derived mock responses for identical validated inputs.
+- Strict request bounds and rejection of blank prompts, invalid seeds, models, and unknown fields.
+- Unit and in-process HTTP integration tests for success, determinism, and invalid input.
 
 ## Verification
 
@@ -32,7 +37,22 @@ Executed on Windows on 2026-10-27 using the committed `uv.lock` and uv-managed C
 | `uv run python -c "import switchboard; print(switchboard.__version__)"` | Imported the installed package and printed `0.1.0`. |
 | `git diff --check` | Passed with no whitespace errors. |
 
-The checked-in `docs/BUILD_CONTRACT.md` has the same SHA-256 digest as the supplied attachment: `405D3F5F4DD1E5028359690D347FF4669874D8E35FA4636BBD2C6DFB45C75E49`.
+Phase 0B verification performed so far:
+
+| Command or check | Observed result |
+| --- | --- |
+| `uv lock` and `uv sync --locked --all-groups` | Resolved and installed 30 packages under CPython 3.12.9. |
+| `uv run ruff check .` | Passed. |
+| `uv run ruff format --check .` | Passed: 12 Python files already formatted. |
+| `uv run mypy src tests` | Passed: no issues in 7 source files. |
+| `uv run pytest` | Passed: 10 tests; warnings are treated as errors. |
+| `uv build` | Built the source distribution and wheel successfully. |
+| Application-factory import check | Created both applications and printed their titles successfully. |
+| Real Uvicorn gateway on `127.0.0.1:18000` | Started and returned `{"status":"ok","service":"gateway"}`. |
+| Real Uvicorn mock provider on `127.0.0.1:18001` | Started and returned its health response. |
+| Two real HTTP `POST /generate` requests | Returned identical JSON, including ID `mock-c4016e8062782e53bafb1713`. |
+
+The post-documentation `git diff --check` also passed without whitespace errors.
 
 ## Decisions
 
@@ -41,14 +61,20 @@ The checked-in `docs/BUILD_CONTRACT.md` has the same SHA-256 digest as the suppl
 - Use strict mypy for static type checking because it is Python-native, mature, and sufficient for the current package; adding a second checker would duplicate feedback without evidence of value.
 - Run CI in Phase 0A so every later subphase inherits clean-machine lint, type, test, and build checks.
 - Defer CD until there is a deployable application and an explicit destination.
-- Keep application dependencies empty until runtime code exists; FastAPI, Uvicorn, and HTTPX will be added in the subphase that first imports them.
+- Add FastAPI, Pydantic, and Uvicorn as direct runtime dependencies now that Phase 0B imports them; keep the Starlette test-client backend `httpx2` development-only.
+- Use separate application factories so processes and tests can construct isolated FastAPI instances.
+- Keep the mock contract intentionally distinct from Chat Completions to avoid implying gateway compatibility before Phase 1.
+- Generate deterministic identities from canonical validated JSON and SHA-256; do not use random values, timestamps, or Python's process-randomized `hash()`.
+- Use Starlette's current `httpx2` test-client backend in development. The first test run exposed the deprecation of its `httpx` fallback; the dependency was corrected and warnings now fail tests.
+- Defer application-level structured logging until request identifiers and meaningful request events exist. Uvicorn provides process/access logs for the current health and mock endpoints.
 
 ## Known limitations and blockers
 
-- No HTTP application, health endpoint, deterministic mock provider, or request flow exists yet.
-- Docker and Docker Compose are installed but are not exercised in Phase 0A because no containerized service exists yet.
+- The gateway does not call the mock provider; no HTTP client lifecycle exists yet.
+- `POST /generate` is a project test contract, not an OpenAI-compatible endpoint.
+- Docker and Docker Compose are installed but are not exercised in Phase 0B because container wiring belongs to Phase 0C.
 - CI configuration is locally reviewed but cannot be reported as a successful GitHub run until it is pushed and GitHub Actions executes it.
 
 ## Next subphase
 
-Phase 0B will add the minimal FastAPI gateway, a separate deterministic mock-provider application, health endpoints, response contracts, and unit/integration coverage. It will not yet implement Chat Completions proxying or SSE streaming.
+Phase 0C will add a lifespan-managed shared async HTTP client, environment-based service URLs, minimal Dockerfiles, Compose health checks, and an end-to-end smoke test. It will not implement full Chat Completions proxying or SSE streaming.
