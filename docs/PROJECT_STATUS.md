@@ -2,12 +2,25 @@
 
 ## Current phase
 
-- **Phase:** 0 — Product specification and repository skeleton
-- **Subphase:** 0D — Phase gate, documentation, and pull request
-- **State:** Complete; PR #1 is open and unmerged, with required hosted checks passing on the implementation head
+- **Phase:** 1 — Real working gateway MVP
+- **Subphase:** 1A — API contracts and deterministic provider behavior
+- **State:** Complete locally on the Phase 1 branch; not pushed and no Phase 1 PR yet
 - **Updated:** 2026-10-27 (Asia/Calcutta)
 
 ## Completed behavior
+
+- Phase 0 PR #1 merged into `main` at `3f2fc925`; its quality and Compose checks passed.
+- Phase 1 work is isolated on `codex/phase-1-gateway-mvp` from that verified merge.
+- Strict Pydantic v2 request models accept only `model`, `messages`, and non-streaming `stream`.
+- Text-only `system`, `user`, and `assistant` messages are supported with explicit count and
+  content bounds; blank content and unknown fields are rejected.
+- OpenAI-shaped non-streaming response contracts cover the completion object, one choice,
+  assistant message, finish reason, and usage fields.
+- The mock provider exposes `POST /v1/chat/completions` for the same declared subset.
+- Canonical validated JSON and SHA-256 produce stable IDs and completion text; a fixed timestamp
+  and documented word-count usage fixtures keep tests deterministic.
+- `docs/api-contract.md` records supported fields, defaults, validation, unsupported capabilities,
+  response structure, and compatibility limitations.
 
 - Repository is based on the synchronized `main` branch and developed on `codex/phase-0-foundation`.
 - Python package uses an installable `src` layout with no custom `PYTHONPATH` requirement.
@@ -84,6 +97,22 @@ Phase 0C verification performed so far:
 
 The final Compose process listing was empty after shutdown, confirming no project containers remained.
 
+Phase 1A verification:
+
+| Command or check | Observed result |
+| --- | --- |
+| Untouched Phase 0 `uv run ruff check .` | Passed before Phase 1 edits. |
+| Untouched Phase 0 `uv run ruff format --check .` | Passed: 16 files already formatted. |
+| Untouched Phase 0 `uv run mypy src tests` | Passed: 11 source files checked. |
+| Untouched Phase 0 `uv run pytest` | Passed: 16 tests and 1 intentional e2e skip. |
+| Focused contract and mock-provider tests | Passed: 24 tests before final boundary additions. |
+| `uv run ruff check .` | Passed. |
+| `uv run ruff format --check .` | Passed: 18 Python files already formatted. |
+| `uv run mypy src tests` | Passed: 12 source files checked. |
+| `uv run pytest` | Passed: 32 tests and 1 intentional e2e skip. |
+| `uv build` | Built the source distribution and wheel successfully. |
+| `git diff --check` | Passed with no whitespace errors. |
+
 Phase 0D clean-start verification:
 
 | Command or check | Observed result |
@@ -111,6 +140,16 @@ Phase 0D clean-start verification:
 
 ## Decisions
 
+- Reject every unknown request field rather than accepting parameters whose behavior is absent.
+- Support only `system`, `user`, and `assistant` text messages in the initial contract.
+- Accept `stream` only as `false` in Phase 1A; `true` requires the Phase 1C SSE lifecycle.
+- Bound model names to 128 characters, messages to 64, and each content string to 32,768
+  characters so the validation boundary does not accept obviously inappropriate input sizes.
+- Preserve meaningful message whitespace while rejecting whitespace-only content.
+- Keep public wire contracts in `contracts.py`; the deterministic provider builder consumes those
+  models but does not redefine them.
+- Treat mock word counts as experimental fixture metadata, never real tokenizer or billing truth.
+
 - Support Python 3.12+ and verify the minimum supported line with uv-managed CPython 3.12.9. The machine also has system Python 3.14.6, but that interpreter was not used for the recorded suite.
 - Use `uv` because it is installed locally and provides reproducible dependency locking and command execution.
 - Use strict mypy for static type checking because it is Python-native, mature, and sufficient for the current package; adding a second checker would duplicate feedback without evidence of value.
@@ -133,12 +172,17 @@ Phase 0D clean-start verification:
 
 ## Known limitations and blockers
 
-- The gateway calls only the mock-provider health endpoint; it does not forward generation requests.
+- The gateway calls only the mock-provider health endpoint; Phase 1A does not forward Chat
+  Completions requests.
 - `POST /generate` is a project test contract, not an OpenAI-compatible endpoint.
+- `POST /v1/chat/completions` currently exists only on the deterministic mock provider.
+- `stream: true`, provider HTTP errors, request IDs, and the stable public error envelope are
+  intentionally deferred.
 - No deployment target exists, so CD remains intentionally absent.
-- No independent review decision exists yet; green CI is not equivalent to approval or merge.
-- PR #1 remains intentionally open and unmerged.
+- Phase 1A is verified locally only; the Phase 1 branch is not pushed and has no PR or hosted CI.
 
 ## Next subphase
 
-Phase 0 is complete. Keep PR #1 unmerged until its review decision is handled. Phase 1A should begin only on an intentional follow-up branch after explicit continuation; it must not be added to this Phase 0 pull request.
+Stop here until the owner says `continue`. Phase 1B will add the non-streaming public gateway route,
+small provider adapter boundary, shared-client forwarding, explicit timeout categories, request
+correlation, cleanup, and stable error translation. It must not begin during the Phase 1A turn.

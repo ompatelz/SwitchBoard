@@ -8,10 +8,18 @@ from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from switchboard import __version__
-from switchboard.contracts import HealthResponse
+from switchboard.contracts import (
+    AssistantMessage,
+    ChatCompletionChoice,
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+    CompletionUsage,
+    HealthResponse,
+)
 
 Prompt = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4096)]
 Seed = Annotated[int, Field(ge=0, le=4_294_967_295)]
+MOCK_CREATED_TIMESTAMP = 1_700_000_000
 
 
 class MockGenerationRequest(BaseModel):
@@ -51,6 +59,38 @@ def build_mock_response(request: MockGenerationRequest) -> MockGenerationRespons
     )
 
 
+def build_mock_chat_completion(request: ChatCompletionRequest) -> ChatCompletionResponse:
+    """Build an OpenAI-shaped completion using only deterministic input data."""
+    canonical_request = json.dumps(
+        request.model_dump(mode="json"),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    digest = hashlib.sha256(canonical_request.encode("utf-8")).hexdigest()
+    content = f"Deterministic mock completion {digest[:16]}"
+
+    # These stable counts are fixtures for contract tests, not tokenizer output.
+    prompt_tokens = sum(len(message.content.split()) for message in request.messages)
+    completion_tokens = len(content.split())
+
+    return ChatCompletionResponse(
+        id=f"chatcmpl-mock-{digest[:24]}",
+        created=MOCK_CREATED_TIMESTAMP,
+        model=request.model,
+        choices=[
+            ChatCompletionChoice(
+                message=AssistantMessage(content=content),
+            )
+        ],
+        usage=CompletionUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        ),
+    )
+
+
 def create_app() -> FastAPI:
     """Create an isolated mock-provider application instance."""
     application = FastAPI(
@@ -78,5 +118,15 @@ def create_app() -> FastAPI:
     async def generate(request: MockGenerationRequest) -> MockGenerationResponse:
         """Return the response derived from the validated request."""
         return build_mock_response(request)
+
+    @application.post(
+        "/v1/chat/completions",
+        response_model=ChatCompletionResponse,
+        summary="Generate a deterministic Chat Completion fixture",
+        tags=["mock"],
+    )
+    async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResponse:
+        """Return a deterministic response for the declared non-streaming subset."""
+        return build_mock_chat_completion(request)
 
     return application

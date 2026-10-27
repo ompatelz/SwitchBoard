@@ -8,9 +8,10 @@ LLM gateways can make routing and caching look simple while hiding difficult cor
 
 The project is a learning-focused, portfolio-grade backend and ML-systems implementation. Claims will be tied to reproducible tests and experiments rather than aspirational benchmark numbers.
 
-## Current scope: Phase 0C
+## Current scope: Phase 1A
 
-This branch currently provides the repository foundation and a runnable two-service slice:
+Phase 0 is merged and verified. This branch adds the first Phase 1 contract increment while
+preserving the runnable two-service foundation:
 
 - an installable `src/switchboard` Python package;
 - a reproducible `uv` environment and committed lockfile;
@@ -23,9 +24,13 @@ This branch currently provides the repository foundation and a runnable two-serv
 - deterministic mock responses with strict Pydantic validation;
 - one lifespan-managed, pooled `httpx.AsyncClient` in the gateway;
 - gateway `GET /readyz`, which verifies the configured mock provider over HTTP; and
-- one non-root container image plus Docker Compose health checks for both services.
+- one non-root container image plus Docker Compose health checks for both services;
+- strict Pydantic v2 models for the documented text-only Chat Completions subset; and
+- a deterministic OpenAI-shaped non-streaming fixture at the mock provider's
+  `POST /v1/chat/completions` route.
 
-This remains infrastructure proof, not a Chat Completions proxy. Phase 0D will audit and document the complete Phase 0 slice before the branch is pushed and opened as a PR.
+The public gateway does not forward Chat Completions yet. That HTTP provider-adapter path belongs
+to Phase 1B; SSE belongs to Phase 1C.
 
 ## HTTP contracts
 
@@ -35,6 +40,7 @@ This remains infrastructure proof, not a Chat Completions proxy. Phase 0D will a
 | Gateway | `GET /readyz` | `{"status":"ready","upstream":"mock-provider"}` when the mock provider is healthy |
 | Mock provider | `GET /healthz` | `{"status":"ok","service":"mock-provider"}` |
 | Mock provider | `POST /generate` | Stable `id`, `model`, and `text` derived from the validated request |
+| Mock provider | `POST /v1/chat/completions` | Deterministic non-streaming Chat Completion fixture |
 
 `POST /generate` accepts this deliberately small request:
 
@@ -48,19 +54,24 @@ This remains infrastructure proof, not a Chat Completions proxy. Phase 0D will a
 
 `prompt` is trimmed and must contain 1–4096 characters. `model` can only be `mock-v1`; `seed` must be an integer from 0 through 4,294,967,295. Unknown fields are rejected. Invalid requests currently use FastAPI's documented validation response with HTTP `422`; this is a mock-only contract, not an OpenAI error-compatibility claim.
 
-## Explicit non-goals for Phase 0C
+The exact supported Chat Completions fields, limits, and response shape are documented in
+[`docs/api-contract.md`](docs/api-contract.md).
 
-Phase 0C does **not** include:
+## Explicit non-goals for Phase 1A
 
-- a `/v1/chat/completions` endpoint or any provider proxying;
+Phase 1A does **not** include:
+
+- gateway forwarding for `/v1/chat/completions`;
 - Redis, PostgreSQL, Qdrant, semantic caching, or model routing;
-- Chat Completions forwarding, response proxying, retries, or SSE streaming;
+- provider adapters, stable gateway error translation, retries, or SSE streaming;
 - a dashboard, Kubernetes, Kafka, or paid-provider integration; or
 - performance, cost-saving, or production-readiness claims.
 
 ## Verified status
 
-The exact checks run for this subphase are recorded in [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md). Both applications have been exercised over local Uvicorn sockets and as healthy Docker Compose services. The gateway reached the mock provider through Compose DNS, the end-to-end smoke test passed, and Compose shut down both containers cleanly. GitHub-hosted CI remains unverified until this branch is pushed.
+The exact checks run for this subphase are recorded in [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md).
+Phase 0's local, container, and hosted checks passed before merge. Phase 1A's contract suite is
+verified locally; this branch has not been pushed and has no hosted Phase 1 checks yet.
 
 ## Local development
 
@@ -153,5 +164,6 @@ Compose sets `SWITCHBOARD_MOCK_PROVIDER_URL=http://mock-provider:8001`. The host
 
 - [`docs/BUILD_CONTRACT.md`](docs/BUILD_CONTRACT.md) — project source of truth supplied by the owner
 - [`docs/architecture.md`](docs/architecture.md) — current and immediately planned architecture
+- [`docs/api-contract.md`](docs/api-contract.md) — exact supported Chat Completions subset
 - [`docs/adr/0001-python-fastapi-chat-completions.md`](docs/adr/0001-python-fastapi-chat-completions.md) — initial architecture decision
 - [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) — verified implementation status and handoff log

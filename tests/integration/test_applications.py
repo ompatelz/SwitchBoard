@@ -39,6 +39,60 @@ def test_mock_endpoint_is_deterministic_across_requests() -> None:
     assert first.json()["model"] == "mock-v1"
 
 
+def test_mock_chat_completions_endpoint_is_deterministic() -> None:
+    """The mock provider serves the documented non-streaming response contract."""
+    payload = {
+        "model": "mock-v1",
+        "messages": [{"role": "user", "content": "Explain ASGI"}],
+    }
+
+    with TestClient(create_mock_provider_app()) as client:
+        first = client.post("/v1/chat/completions", json=payload)
+        second = client.post("/v1/chat/completions", json={**payload, "stream": False})
+
+    assert first.status_code == 200
+    assert first.json() == second.json()
+    assert first.json()["object"] == "chat.completion"
+    assert first.json()["choices"][0]["message"]["role"] == "assistant"
+
+
+@pytest.mark.parametrize(
+    ("payload", "error_type"),
+    [
+        ({"model": "mock-v1", "messages": []}, "too_short"),
+        (
+            {"model": "mock-v1", "messages": [{"role": "developer", "content": "x"}]},
+            "literal_error",
+        ),
+        (
+            {
+                "model": "mock-v1",
+                "messages": [{"role": "user", "content": "x"}],
+                "stream": True,
+            },
+            "literal_error",
+        ),
+        (
+            {
+                "model": "mock-v1",
+                "messages": [{"role": "user", "content": "x"}],
+                "max_tokens": 10,
+            },
+            "extra_forbidden",
+        ),
+    ],
+)
+def test_mock_chat_completions_rejects_invalid_requests(
+    payload: dict[str, object], error_type: str
+) -> None:
+    """HTTP validation exposes the same strict boundary as direct model validation."""
+    with TestClient(create_mock_provider_app()) as client:
+        response = client.post("/v1/chat/completions", json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["type"] == error_type
+
+
 @pytest.mark.parametrize(
     ("payload", "error_type"),
     [
