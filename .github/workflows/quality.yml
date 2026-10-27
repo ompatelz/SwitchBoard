@@ -78,4 +78,4 @@ jobs:
 
       - name: Stop Compose services
         if: always()
-        run: docker compose -f deploy/compose.yaml down
+        run: docker compose -f deploy/compose.yaml down --timeout 15

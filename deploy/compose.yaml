@@ -1,9 +1,6 @@
 name: switchboard
 
 x-switchboard-service: &switchboard-service
-  build:
-    context: ..
-    dockerfile: Dockerfile
   image: switchboard:phase-0
   init: true
   restart: "no"
@@ -11,6 +8,9 @@ x-switchboard-service: &switchboard-service
 services:
   mock-provider:
     <<: *switchboard-service
+    build:
+      context: ..
+      dockerfile: Dockerfile
     command:
       - uvicorn
       - switchboard.mock_provider:create_app

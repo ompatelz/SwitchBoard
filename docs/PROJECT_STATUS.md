@@ -3,8 +3,8 @@
 ## Current phase
 
 - **Phase:** 0 — Product specification and repository skeleton
-- **Subphase:** 0C — Resource lifecycle, Compose, and end-to-end wiring
-- **State:** Complete and locally/container verified; GitHub-hosted CI is pending a future push
+- **Subphase:** 0D — Phase gate, documentation, and pull request
+- **State:** Clean-start verification complete; push, PR, and GitHub-hosted CI remain
 - **Updated:** 2026-10-27 (Asia/Calcutta)
 
 ## Completed behavior
@@ -26,6 +26,11 @@
 - One locked, non-root container image reused by both services.
 - Docker Compose ordering and health checks for the mock provider and gateway.
 - Opt-in real-socket end-to-end test integrated into local instructions and GitHub Actions CI.
+- Phase 0 scope audit completed with no future-phase infrastructure or benchmark claims introduced.
+- Setup, environment behavior, container networking, and observed failure troubleshooting documented.
+- Mermaid diagram added for the actual Phase 0 request and resource-lifecycle flow.
+- Unused example environment variables removed so the sample reflects only settings the application reads.
+- Compose corrected to build the shared image once and reuse it for both services.
 
 ## Verification
 
@@ -79,6 +84,27 @@ Phase 0C verification performed so far:
 
 The final Compose process listing was empty after shutdown, confirming no project containers remained.
 
+Phase 0D clean-start verification:
+
+| Command or check | Observed result |
+| --- | --- |
+| `uv venv --clear --python 3.12 .venv` | Recreated the environment with uv-managed CPython 3.12.9. |
+| `uv sync --locked --all-groups` | Installed the project and 31 locked dependencies into the empty environment. |
+| Fresh import/factory check | Printed version `0.1.0` and created both application factories without `PYTHONPATH` changes. |
+| `uv run ruff check .` | Passed. |
+| `uv run ruff format --check .` | Passed: 16 Python files already formatted. |
+| `uv run mypy src tests` | Passed: no issues in 11 source files. |
+| `uv run pytest` | Passed: 16 tests and 1 intentional e2e skip. |
+| Fresh `uv build` | Built both source and wheel archives after old `dist/` was removed. |
+| `docker compose ... build --no-cache` | Passed; one shared image was built with 18 runtime packages. |
+| Clean Compose startup | Mock provider and gateway both became healthy. |
+| Container e2e smoke | Passed: 1 test. |
+| Image runtime user | Verified as non-root user `switchboard`. |
+| Graceful Compose stop | Both services logged `Application shutdown complete`; no unclosed-client warning appeared. |
+| Scoped Compose removal | Both containers and the Phase 0D network were removed. |
+| Tracked-artifact scan | No `.env`, virtual environment, cache, build output, bytecode, or log file is tracked. |
+| Secret-like value scan | No credential-like assignments found outside the non-secret build contract text. |
+
 ## Decisions
 
 - Support Python 3.12+ and verify the minimum supported line with uv-managed CPython 3.12.9. The machine also has system Python 3.14.6, but that interpreter was not used for the recorded suite.
@@ -98,13 +124,16 @@ The final Compose process listing was empty after shutdown, confirming no projec
 - Use environment configuration with a local loopback default; Compose overrides it with the `mock-provider` service hostname.
 - Reuse one image for both processes and override only the Uvicorn command, avoiding duplicate Dockerfiles.
 - Extend CI with a Compose smoke job now that containerized behavior exists; CD remains deferred without a deployment destination.
+- Keep `.env.example` limited to variables currently consumed by code; it documents values but is not automatically loaded.
+- Build the shared Compose image only from the mock-provider service and reuse the same tag for the gateway.
 
 ## Known limitations and blockers
 
 - The gateway calls only the mock-provider health endpoint; it does not forward generation requests.
 - `POST /generate` is a project test contract, not an OpenAI-compatible endpoint.
-- CI configuration is locally reviewed but cannot be reported as a successful GitHub run until it is pushed and GitHub Actions executes it.
+- GitHub-hosted CI is not yet verified; local success does not predict its final status.
+- No deployment target exists, so CD remains intentionally absent.
 
 ## Next subphase
 
-Phase 0D will audit Phase 0 for unnecessary abstraction and scope creep, run clean-start verification, improve troubleshooting documentation, update this status, push the branch, and open—but not merge—the pull request.
+Push `codex/phase-0-foundation`, open the pull request without merging it, and verify the exact GitHub Actions and PR state. Phase 1 must not begin in this phase.

@@ -20,6 +20,17 @@ Uvicorn runs each application as a separate process. FastAPI routes requests and
 
 The gateway uses the mock provider only for readiness. There is no request forwarding, persistent store, cache, router, provider adapter, or evaluation workload.
 
+```mermaid
+flowchart LR
+    C[Local client or smoke test] -->|GET /healthz| G[Gateway FastAPI app]
+    C -->|GET /readyz| G
+    C -->|POST /generate| M[Mock-provider FastAPI app]
+    G -->|shared HTTPX client: GET /healthz| M
+    L[Gateway lifespan] -->|create at startup| H[AsyncClient connection pool]
+    H --> G
+    L -->|close at shutdown| H
+```
+
 ## Application factories
 
 `switchboard.gateway.create_app()` and `switchboard.mock_provider.create_app()` each return a new FastAPI instance. This keeps process construction explicit, avoids mutable global application state, and lets tests create isolated instances. Uvicorn receives the factory with `--factory` and owns the network listener and event loop.
@@ -50,7 +61,7 @@ Creating a client per request was rejected because it would discard connection p
 
 ## Container topology
 
-Both services use one locked, non-root image. Compose starts the mock provider first, waits for its `/healthz`, then starts the gateway with `SWITCHBOARD_MOCK_PROVIDER_URL=http://mock-provider:8001`. Gateway health checks call `/readyz`, proving service discovery and upstream reachability rather than process liveness alone. Only ports 8000 and 8001 are published to host loopback.
+Both services use one locked, non-root image, built once from the mock-provider service definition and reused by the gateway. Compose starts the mock provider first, waits for its `/healthz`, then starts the gateway with `SWITCHBOARD_MOCK_PROVIDER_URL=http://mock-provider:8001`. Gateway health checks call `/readyz`, proving service discovery and upstream reachability rather than process liveness alone. Only ports 8000 and 8001 are published to host loopback.
 
 ## Immediately planned architecture: Phase 0D
 

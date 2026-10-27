@@ -27,8 +27,10 @@ def test_running_services_are_healthy_and_deterministic() -> None:
         first = client.post(f"{mock_url}/generate", json=payload)
         second = client.post(f"{mock_url}/generate", json=payload)
 
+    for response in (gateway_health, gateway_ready, mock_health, first, second):
+        assert response.status_code == 200
+
     assert gateway_health.json() == {"status": "ok", "service": "gateway"}
     assert gateway_ready.json() == {"status": "ready", "upstream": "mock-provider"}
     assert mock_health.json() == {"status": "ok", "service": "mock-provider"}
-    assert first.status_code == 200
     assert first.json() == second.json()

@@ -139,7 +139,15 @@ docker compose -f deploy/compose.yaml down --timeout 15
 
 Compose sets `SWITCHBOARD_MOCK_PROVIDER_URL=http://mock-provider:8001`. The hostname is the Compose service name: `localhost` inside the gateway container would incorrectly point back to the gateway container itself.
 
-Copy `.env.example` to `.env` only when local configuration is needed. Never commit `.env` or real credentials.
+`.env.example` documents the two environment variables currently read by the gateway. Set them in the shell or through a process/container environment; the application does not silently load `.env` files. Never commit `.env` or real credentials.
+
+## Troubleshooting
+
+- **Docker reports a missing `dockerDesktopLinuxEngine` pipe:** Docker's CLI is installed, but the Desktop engine is not ready. Start Docker Desktop, wait for `docker ps` to succeed, then retry Compose.
+- **Gateway `/healthz` is 200 but `/readyz` is 503:** the gateway process is alive but cannot validate the configured mock-provider health response. Check `SWITCHBOARD_MOCK_PROVIDER_URL` and the mock-provider logs.
+- **The e2e test is skipped:** this is expected during the ordinary unit/integration suite. Start both services and set `SWITCHBOARD_E2E=1` to opt into real-socket testing.
+- **`uv sync --locked` reports a stale lockfile:** run `uv lock`, review the dependency diff, and commit `uv.lock` only when the change is intentional.
+- **Port 8000 or 8001 is already in use:** stop the conflicting process or change both the published port and the corresponding smoke-test URL.
 
 ## Project documents
 

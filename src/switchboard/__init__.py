@@ -1,8 +1,4 @@
-"""Switchboard's Python package.
-
-Phase 0A intentionally exposes only package metadata. Runtime applications are
-introduced in later, separately verified subphases.
-"""
+"""Switchboard's gateway and deterministic mock-provider package."""
 
 __version__ = "0.1.0"
 
