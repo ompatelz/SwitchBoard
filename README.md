@@ -8,9 +8,9 @@ LLM gateways can make routing and caching look simple while hiding difficult cor
 
 The project is a learning-focused, portfolio-grade backend and ML-systems implementation. Claims will be tied to reproducible tests and experiments rather than aspirational benchmark numbers.
 
-## Current scope: Phase 0B
+## Current scope: Phase 0C
 
-This branch currently provides the repository foundation and the first two ASGI applications:
+This branch currently provides the repository foundation and a runnable two-service slice:
 
 - an installable `src/switchboard` Python package;
 - a reproducible `uv` environment and committed lockfile;
@@ -19,16 +19,20 @@ This branch currently provides the repository foundation and the first two ASGI 
 - safe example environment values;
 - architecture, decision, build-contract, and status documentation;
 - a FastAPI gateway with `GET /healthz`;
-- a separate FastAPI mock provider with `GET /healthz` and `POST /generate`; and
-- deterministic mock responses with strict Pydantic validation.
+- a separate FastAPI mock provider with `GET /healthz` and `POST /generate`;
+- deterministic mock responses with strict Pydantic validation;
+- one lifespan-managed, pooled `httpx.AsyncClient` in the gateway;
+- gateway `GET /readyz`, which verifies the configured mock provider over HTTP; and
+- one non-root container image plus Docker Compose health checks for both services.
 
-The gateway does not call the mock provider yet. Phase 0C will add the shared HTTP client lifecycle and container wiring.
+This remains infrastructure proof, not a Chat Completions proxy. Phase 0D will audit and document the complete Phase 0 slice before the branch is pushed and opened as a PR.
 
 ## HTTP contracts
 
 | Service | Method and path | Successful response |
 | --- | --- | --- |
 | Gateway | `GET /healthz` | `{"status":"ok","service":"gateway"}` |
+| Gateway | `GET /readyz` | `{"status":"ready","upstream":"mock-provider"}` when the mock provider is healthy |
 | Mock provider | `GET /healthz` | `{"status":"ok","service":"mock-provider"}` |
 | Mock provider | `POST /generate` | Stable `id`, `model`, and `text` derived from the validated request |
 
@@ -44,20 +48,19 @@ The gateway does not call the mock provider yet. Phase 0C will add the shared HT
 
 `prompt` is trimmed and must contain 1–4096 characters. `model` can only be `mock-v1`; `seed` must be an integer from 0 through 4,294,967,295. Unknown fields are rejected. Invalid requests currently use FastAPI's documented validation response with HTTP `422`; this is a mock-only contract, not an OpenAI error-compatibility claim.
 
-## Explicit non-goals for Phase 0B
+## Explicit non-goals for Phase 0C
 
-Phase 0B does **not** include:
+Phase 0C does **not** include:
 
 - a `/v1/chat/completions` endpoint or any provider proxying;
 - Redis, PostgreSQL, Qdrant, semantic caching, or model routing;
-- gateway-to-provider HTTP calls, shared connection pooling, or SSE streaming;
-- Docker images or Compose services;
+- Chat Completions forwarding, response proxying, retries, or SSE streaming;
 - a dashboard, Kubernetes, Kafka, or paid-provider integration; or
 - performance, cost-saving, or production-readiness claims.
 
 ## Verified status
 
-The exact checks run for this subphase are recorded in [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md). Both applications have been started with Uvicorn and exercised over real localhost HTTP. The package and test suite also pass the locked lint, format, type, test, and build checks. GitHub-hosted CI remains unverified until this branch is pushed.
+The exact checks run for this subphase are recorded in [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md). Both applications have been exercised over local Uvicorn sockets and as healthy Docker Compose services. The gateway reached the mock provider through Compose DNS, the end-to-end smoke test passed, and Compose shut down both containers cleanly. GitHub-hosted CI remains unverified until this branch is pushed.
 
 ## Local development
 
@@ -104,12 +107,37 @@ Exercise both services:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/healthz
+Invoke-RestMethod http://127.0.0.1:8000/readyz
 Invoke-RestMethod http://127.0.0.1:8001/healthz
 Invoke-RestMethod -Method Post `
   -Uri http://127.0.0.1:8001/generate `
   -ContentType application/json `
   -Body '{"prompt":"Explain ASGI","model":"mock-v1","seed":7}'
 ```
+
+## Docker Compose
+
+Docker Desktop must be running. Build and wait for both health checks:
+
+```powershell
+docker compose -f deploy/compose.yaml up --build --wait --wait-timeout 180
+```
+
+Run the real end-to-end smoke test against the published ports:
+
+```powershell
+$env:SWITCHBOARD_E2E = "1"
+uv run pytest -m e2e tests/e2e
+Remove-Item Env:SWITCHBOARD_E2E
+```
+
+Stop the stack gracefully:
+
+```powershell
+docker compose -f deploy/compose.yaml down --timeout 15
+```
+
+Compose sets `SWITCHBOARD_MOCK_PROVIDER_URL=http://mock-provider:8001`. The hostname is the Compose service name: `localhost` inside the gateway container would incorrectly point back to the gateway container itself.
 
 Copy `.env.example` to `.env` only when local configuration is needed. Never commit `.env` or real credentials.
 

@@ -12,3 +12,12 @@ class HealthResponse(BaseModel):
 
     status: Literal["ok"] = "ok"
     service: Literal["gateway", "mock-provider"]
+
+
+class ReadinessResponse(BaseModel):
+    """Response returned when the gateway and required upstream are ready."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: Literal["ready"] = "ready"
+    upstream: Literal["mock-provider"] = "mock-provider"

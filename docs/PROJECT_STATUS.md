@@ -3,8 +3,8 @@
 ## Current phase
 
 - **Phase:** 0 — Product specification and repository skeleton
-- **Subphase:** 0B — Minimal gateway and deterministic mock provider
-- **State:** Complete and locally verified; GitHub-hosted CI is pending a future push
+- **Subphase:** 0C — Resource lifecycle, Compose, and end-to-end wiring
+- **State:** Complete and locally/container verified; GitHub-hosted CI is pending a future push
 - **Updated:** 2026-10-27 (Asia/Calcutta)
 
 ## Completed behavior
@@ -20,6 +20,12 @@
 - Deterministic SHA-256-derived mock responses for identical validated inputs.
 - Strict request bounds and rejection of blank prompts, invalid seeds, models, and unknown fields.
 - Unit and in-process HTTP integration tests for success, determinism, and invalid input.
+- Typed environment configuration with safe local defaults and Compose service discovery.
+- One lifespan-managed shared `httpx.AsyncClient` created at gateway startup and closed at shutdown.
+- `GET /readyz` verifies the configured mock-provider health contract and returns stable HTTP 503 on failure.
+- One locked, non-root container image reused by both services.
+- Docker Compose ordering and health checks for the mock provider and gateway.
+- Opt-in real-socket end-to-end test integrated into local instructions and GitHub Actions CI.
 
 ## Verification
 
@@ -54,6 +60,25 @@ Phase 0B verification performed so far:
 
 The post-documentation `git diff --check` also passed without whitespace errors.
 
+Phase 0C verification performed so far:
+
+| Command or check | Observed result |
+| --- | --- |
+| `uv lock` and `uv sync --locked --all-groups` | Resolved and installed 33 packages under CPython 3.12.9. |
+| `uv run ruff check .` | Passed. |
+| `uv run ruff format --check .` | Passed: 16 Python files already formatted. |
+| `uv run mypy src tests` | Passed: no issues in 11 source files. |
+| `uv run pytest` | Passed: 16 tests and 1 intentional e2e skip; the e2e test runs only against started services. |
+| `uv build` | Built the source distribution and wheel successfully. |
+| Local real-socket e2e run on ports 18000/18001 | Passed: 1 test. |
+| `docker compose ... config --quiet` | Passed. |
+| Compose image build | Passed using Python 3.12 slim and uv 0.12.7; installed only 18 runtime packages. |
+| Compose health checks | Both `gateway` and `mock-provider` reported healthy. |
+| Container e2e smoke test | Passed: gateway liveness/readiness, mock health, and repeated deterministic generation. |
+| `docker compose ... down --timeout 15` | Both containers stopped and were removed; the scoped network was removed. |
+
+The final Compose process listing was empty after shutdown, confirming no project containers remained.
+
 ## Decisions
 
 - Support Python 3.12+ and verify the minimum supported line with uv-managed CPython 3.12.9. The machine also has system Python 3.14.6, but that interpreter was not used for the recorded suite.
@@ -67,14 +92,19 @@ The post-documentation `git diff --check` also passed without whitespace errors.
 - Generate deterministic identities from canonical validated JSON and SHA-256; do not use random values, timestamps, or Python's process-randomized `hash()`.
 - Use Starlette's current `httpx2` test-client backend in development. The first test run exposed the deprecation of its `httpx` fallback; the dependency was corrected and warnings now fail tests.
 - Defer application-level structured logging until request identifiers and meaningful request events exist. Uvicorn provides process/access logs for the current health and mock endpoints.
+- Add classic `httpx` as a runtime dependency for the gateway's pooled `AsyncClient`; retain `httpx2` only for Starlette's current test client.
+- Use FastAPI lifespan as the sole owner of the shared client so startup, cancellation, and shutdown have one cleanup boundary.
+- Treat `/healthz` as process liveness and `/readyz` as required-upstream readiness.
+- Use environment configuration with a local loopback default; Compose overrides it with the `mock-provider` service hostname.
+- Reuse one image for both processes and override only the Uvicorn command, avoiding duplicate Dockerfiles.
+- Extend CI with a Compose smoke job now that containerized behavior exists; CD remains deferred without a deployment destination.
 
 ## Known limitations and blockers
 
-- The gateway does not call the mock provider; no HTTP client lifecycle exists yet.
+- The gateway calls only the mock-provider health endpoint; it does not forward generation requests.
 - `POST /generate` is a project test contract, not an OpenAI-compatible endpoint.
-- Docker and Docker Compose are installed but are not exercised in Phase 0B because container wiring belongs to Phase 0C.
 - CI configuration is locally reviewed but cannot be reported as a successful GitHub run until it is pushed and GitHub Actions executes it.
 
 ## Next subphase
 
-Phase 0C will add a lifespan-managed shared async HTTP client, environment-based service URLs, minimal Dockerfiles, Compose health checks, and an end-to-end smoke test. It will not implement full Chat Completions proxying or SSE streaming.
+Phase 0D will audit Phase 0 for unnecessary abstraction and scope creep, run clean-start verification, improve troubleshooting documentation, update this status, push the branch, and open—but not merge—the pull request.
