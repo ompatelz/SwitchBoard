@@ -4,7 +4,7 @@
 
 - **Phase:** 0 — Product specification and repository skeleton
 - **Subphase:** 0D — Phase gate, documentation, and pull request
-- **State:** Clean-start verification complete; push, PR, and GitHub-hosted CI remain
+- **State:** Complete; PR #1 is open and unmerged, with required hosted checks passing on the implementation head
 - **Updated:** 2026-10-27 (Asia/Calcutta)
 
 ## Completed behavior
@@ -104,6 +104,10 @@ Phase 0D clean-start verification:
 | Scoped Compose removal | Both containers and the Phase 0D network were removed. |
 | Tracked-artifact scan | No `.env`, virtual environment, cache, build output, bytecode, or log file is tracked. |
 | Secret-like value scan | No credential-like assignments found outside the non-secret build contract text. |
+| Branch push | Local and remote `codex/phase-0-foundation` matched at implementation SHA `efda6b4cd596cfb0c459f12d943de81e2d6951c2`. |
+| Pull request | [PR #1](https://github.com/ompatelz/SwitchBoard/pull/1) opened as non-draft, open, mergeable, and intentionally unmerged. |
+| GitHub Actions `quality` | Passed on both push-triggered and PR-triggered runs for the implementation head. |
+| GitHub Actions `compose-smoke` | Passed on both push-triggered and PR-triggered runs for the implementation head. |
 
 ## Decisions
 
@@ -131,9 +135,10 @@ Phase 0D clean-start verification:
 
 - The gateway calls only the mock-provider health endpoint; it does not forward generation requests.
 - `POST /generate` is a project test contract, not an OpenAI-compatible endpoint.
-- GitHub-hosted CI is not yet verified; local success does not predict its final status.
 - No deployment target exists, so CD remains intentionally absent.
+- No independent review decision exists yet; green CI is not equivalent to approval or merge.
+- PR #1 remains intentionally open and unmerged.
 
 ## Next subphase
 
-Push `codex/phase-0-foundation`, open the pull request without merging it, and verify the exact GitHub Actions and PR state. Phase 1 must not begin in this phase.
+Phase 0 is complete. Keep PR #1 unmerged until its review decision is handled. Phase 1A should begin only on an intentional follow-up branch after explicit continuation; it must not be added to this Phase 0 pull request.
