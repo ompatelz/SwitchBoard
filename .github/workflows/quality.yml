@@ -1,0 +1,81 @@
+name: Quality
+
+on:
+  push:
+    branches: [main, "codex/**"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install locked dependencies
+        run: uv sync --locked --all-groups
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Type-check
+        run: uv run mypy src tests
+
+      - name: Test
+        run: uv run pytest
+
+      - name: Build package
+        run: uv build
+
+  compose-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: quality
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install locked dependencies
+        run: uv sync --locked --all-groups
+
+      - name: Start Compose services
+        run: docker compose -f deploy/compose.yaml up --build --wait --wait-timeout 120
+
+      - name: Run end-to-end smoke test
+        env:
+          SWITCHBOARD_E2E: "1"
+        run: uv run pytest -m e2e tests/e2e
+
+      - name: Show service logs after failure
+        if: failure()
+        run: docker compose -f deploy/compose.yaml logs --no-color
+
+      - name: Stop Compose services
+        if: always()
+        run: docker compose -f deploy/compose.yaml down --timeout 15
