@@ -3,8 +3,9 @@
 ## Current phase
 
 - **Phase:** 1 — Real working gateway MVP
-- **Subphase:** 1A — API contracts and deterministic provider behavior
-- **State:** Complete locally on the Phase 1 branch; not pushed and no Phase 1 PR yet
+- **Subphase:** 1B — Non-streaming gateway and provider adapter
+- **State:** Implementation and local verification complete; Docker Compose acceptance is blocked
+  by a Docker Desktop engine startup failure; not pushed and no Phase 1 PR yet
 - **Updated:** 2026-10-27 (Asia/Calcutta)
 
 ## Completed behavior
@@ -21,8 +22,21 @@
   and documented word-count usage fixtures keep tests deterministic.
 - `docs/api-contract.md` records supported fields, defaults, validation, unsupported capabilities,
   response structure, and compatibility limitations.
+- Public gateway `POST /v1/chat/completions` validates and forwards non-streaming requests.
+- A minimal `ChatProvider` protocol separates the route from `HttpxMockProvider` without a plugin
+  framework.
+- FastAPI dependency injection permits a typed provider replacement in tests.
+- Readiness and completion forwarding reuse the same lifespan-owned `httpx.AsyncClient`.
+- Connect, read, write, and pool timeouts have separate validated environment settings.
+- Safe incoming request IDs are preserved; missing or unsafe IDs are replaced, forwarded, and
+  returned in response headers and gateway error details.
+- Malformed JSON, request validation, connection failure, timeout, provider 4xx, 429, 5xx, and
+  invalid provider responses have stable non-sensitive error mappings.
+- Buffered provider responses are explicitly closed, the shared client closes at shutdown, and
+  cancellation escapes provider error translation.
 
-- Repository is based on the synchronized `main` branch and developed on `codex/phase-0-foundation`.
+- Phase 0 development was based on synchronized `main` and isolated on
+  `codex/phase-0-foundation` before merge.
 - Python package uses an installable `src` layout with no custom `PYTHONPATH` requirement.
 - Development dependencies and transitive versions are managed by `uv` and a committed lockfile.
 - Ruff, strict mypy, pytest, and package-build checks have shared local commands and GitHub Actions CI.
@@ -113,6 +127,24 @@ Phase 1A verification:
 | `uv build` | Built the source distribution and wheel successfully. |
 | `git diff --check` | Passed with no whitespace errors. |
 
+Phase 1B verification:
+
+| Command or check | Observed result |
+| --- | --- |
+| Focused configuration, provider, request-ID, lifecycle, and gateway tests | Passed: 30 tests. |
+| `uv run ruff check .` | Passed. |
+| `uv run ruff format --check .` | Passed: 23 Python files already formatted. |
+| `uv run mypy src tests` | Passed: 17 source files checked. |
+| `uv run pytest` | Passed: 58 tests and 1 intentional e2e skip. |
+| `uv build` | Built the source distribution and wheel successfully. |
+| `git diff --check` | Passed with no whitespace errors. |
+| Real Uvicorn services on ports 18000/18001 | Started successfully. |
+| Real-socket `SWITCHBOARD_E2E=1` test | Passed: 1 test; gateway forwarded to mock provider. |
+| Local Uvicorn cleanup check | Ports 18000/18001 and both server process IDs were absent afterward. |
+| `docker compose ... config --quiet` | Passed before the engine-dependent startup step. |
+| Docker Compose startup | Blocked before build: Docker Desktop Linux engine API unavailable. |
+| Docker Desktop UI evidence | Secrets Engine could not rename its local `engine.sock` because the file was inaccessible. |
+
 Phase 0D clean-start verification:
 
 | Command or check | Observed result |
@@ -149,6 +181,17 @@ Phase 0D clean-start verification:
 - Keep public wire contracts in `contracts.py`; the deterministic provider builder consumes those
   models but does not redefine them.
 - Treat mock word counts as experimental fixture metadata, never real tokenizer or billing truth.
+- Use one `ChatProvider` protocol with one HTTPX adapter; defer registries and plugin frameworks
+  until multiple providers create a demonstrated need.
+- Let lifespan own the shared client and let the adapter borrow it, so request handlers never
+  create or close the connection pool.
+- Configure HTTPX connect, read, write, and pool timeouts independently rather than using one
+  ambiguous scalar.
+- Map provider rejection, throttling, unavailability, transport failure, and invalid responses to
+  distinct codes; never expose upstream response bodies or internal exception text.
+- Accept only bounded log-safe request IDs and replace unsafe input instead of reflecting it.
+- Do not catch `BaseException` or cancellation exceptions in provider translation.
+- Do not retry or fall back in Phase 1B: one gateway request makes at most one provider request.
 
 - Support Python 3.12+ and verify the minimum supported line with uv-managed CPython 3.12.9. The machine also has system Python 3.14.6, but that interpreter was not used for the recorded suite.
 - Use `uv` because it is installed locally and provides reproducible dependency locking and command execution.
@@ -172,17 +215,17 @@ Phase 0D clean-start verification:
 
 ## Known limitations and blockers
 
-- The gateway calls only the mock-provider health endpoint; Phase 1A does not forward Chat
-  Completions requests.
 - `POST /generate` is a project test contract, not an OpenAI-compatible endpoint.
-- `POST /v1/chat/completions` currently exists only on the deterministic mock provider.
-- `stream: true`, provider HTTP errors, request IDs, and the stable public error envelope are
-  intentionally deferred.
+- `stream: true`, SSE, partial-stream errors, and disconnect cleanup are intentionally deferred.
+- There are no retries, fallback providers, authentication, or paid-provider integrations.
 - No deployment target exists, so CD remains intentionally absent.
-- Phase 1A is verified locally only; the Phase 1 branch is not pushed and has no PR or hosted CI.
+- Docker Compose could not be executed because the installed Docker Desktop failed while starting
+  its Secrets Engine. Resetting Docker or modifying its private socket state was not authorized.
+- The real-socket equivalent passed locally, but it is not represented as a Compose pass.
+- The Phase 1 branch is not pushed and has no PR or hosted CI.
 
 ## Next subphase
 
-Stop here until the owner says `continue`. Phase 1B will add the non-streaming public gateway route,
-small provider adapter boundary, shared-client forwarding, explicit timeout categories, request
-correlation, cleanup, and stable error translation. It must not begin during the Phase 1A turn.
+Resolve the Docker Desktop engine failure and rerun the Phase 1B Compose smoke test before marking
+the acceptance gate fully passed. Then stop until the owner says `continue`; Phase 1C will add SSE
+streaming, cancellation/disconnect behavior, and streaming resource-lifecycle tests.

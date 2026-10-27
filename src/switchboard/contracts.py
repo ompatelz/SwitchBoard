@@ -87,3 +87,18 @@ class ChatCompletionResponse(StrictContract):
     model: str
     choices: Annotated[list[ChatCompletionChoice], Field(min_length=1, max_length=1)]
     usage: CompletionUsage
+
+
+class ErrorDetail(StrictContract):
+    """Non-sensitive error information returned by the public gateway."""
+
+    message: str
+    type: Literal["invalid_request_error", "provider_error"]
+    code: str
+    request_id: str
+
+
+class ErrorResponse(StrictContract):
+    """Stable public gateway error envelope."""
+
+    error: ErrorDetail

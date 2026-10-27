@@ -8,9 +8,9 @@ LLM gateways can make routing and caching look simple while hiding difficult cor
 
 The project is a learning-focused, portfolio-grade backend and ML-systems implementation. Claims will be tied to reproducible tests and experiments rather than aspirational benchmark numbers.
 
-## Current scope: Phase 1A
+## Current scope: Phase 1B
 
-Phase 0 is merged and verified. This branch adds the first Phase 1 contract increment while
+Phase 0 is merged and verified. This branch adds the non-streaming Phase 1 gateway path while
 preserving the runnable two-service foundation:
 
 - an installable `src/switchboard` Python package;
@@ -27,10 +27,13 @@ preserving the runnable two-service foundation:
 - one non-root container image plus Docker Compose health checks for both services;
 - strict Pydantic v2 models for the documented text-only Chat Completions subset; and
 - a deterministic OpenAI-shaped non-streaming fixture at the mock provider's
-  `POST /v1/chat/completions` route.
+  `POST /v1/chat/completions` route;
+- gateway `POST /v1/chat/completions` forwarding through a typed provider adapter;
+- one reused lifespan-managed HTTPX connection pool with explicit timeout categories;
+- safe request-ID acceptance/generation and cross-service propagation; and
+- stable non-sensitive errors for invalid input and provider failures.
 
-The public gateway does not forward Chat Completions yet. That HTTP provider-adapter path belongs
-to Phase 1B; SSE belongs to Phase 1C.
+The gateway supports non-streaming Chat Completions only. SSE belongs to Phase 1C.
 
 ## HTTP contracts
 
@@ -38,6 +41,7 @@ to Phase 1B; SSE belongs to Phase 1C.
 | --- | --- | --- |
 | Gateway | `GET /healthz` | `{"status":"ok","service":"gateway"}` |
 | Gateway | `GET /readyz` | `{"status":"ready","upstream":"mock-provider"}` when the mock provider is healthy |
+| Gateway | `POST /v1/chat/completions` | Validated non-streaming Chat Completion from the configured provider |
 | Mock provider | `GET /healthz` | `{"status":"ok","service":"mock-provider"}` |
 | Mock provider | `POST /generate` | Stable `id`, `model`, and `text` derived from the validated request |
 | Mock provider | `POST /v1/chat/completions` | Deterministic non-streaming Chat Completion fixture |
@@ -57,21 +61,22 @@ to Phase 1B; SSE belongs to Phase 1C.
 The exact supported Chat Completions fields, limits, and response shape are documented in
 [`docs/api-contract.md`](docs/api-contract.md).
 
-## Explicit non-goals for Phase 1A
+## Explicit non-goals for Phase 1B
 
-Phase 1A does **not** include:
+Phase 1B does **not** include:
 
-- gateway forwarding for `/v1/chat/completions`;
 - Redis, PostgreSQL, Qdrant, semantic caching, or model routing;
-- provider adapters, stable gateway error translation, retries, or SSE streaming;
+- retries, fallback routing, circuit breakers, or SSE streaming;
+- tenant authentication or multiple real providers;
 - a dashboard, Kubernetes, Kafka, or paid-provider integration; or
 - performance, cost-saving, or production-readiness claims.
 
 ## Verified status
 
 The exact checks run for this subphase are recorded in [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md).
-Phase 0's local, container, and hosted checks passed before merge. Phase 1A's contract suite is
-verified locally; this branch has not been pushed and has no hosted Phase 1 checks yet.
+Phase 0's local, container, and hosted checks passed before merge. Phase 1B's exact local and
+Compose results are recorded in the status document; this branch has not been pushed and has no
+hosted Phase 1 checks yet.
 
 ## Local development
 
@@ -124,6 +129,11 @@ Invoke-RestMethod -Method Post `
   -Uri http://127.0.0.1:8001/generate `
   -ContentType application/json `
   -Body '{"prompt":"Explain ASGI","model":"mock-v1","seed":7}'
+Invoke-RestMethod -Method Post `
+  -Uri http://127.0.0.1:8000/v1/chat/completions `
+  -Headers @{ "X-Request-ID" = "readme-example-1" } `
+  -ContentType application/json `
+  -Body '{"model":"mock-v1","messages":[{"role":"user","content":"Explain ASGI"}]}'
 ```
 
 ## Docker Compose
@@ -150,12 +160,18 @@ docker compose -f deploy/compose.yaml down --timeout 15
 
 Compose sets `SWITCHBOARD_MOCK_PROVIDER_URL=http://mock-provider:8001`. The hostname is the Compose service name: `localhost` inside the gateway container would incorrectly point back to the gateway container itself.
 
-`.env.example` documents the two environment variables currently read by the gateway. Set them in the shell or through a process/container environment; the application does not silently load `.env` files. Never commit `.env` or real credentials.
+`.env.example` documents the provider URL plus connect, read, write, and pool timeouts currently
+read by the gateway. Set them in the shell or through a process/container environment; the
+application does not silently load `.env` files. Never commit `.env` or real credentials.
 
 ## Troubleshooting
 
 - **Docker reports a missing `dockerDesktopLinuxEngine` pipe:** Docker's CLI is installed, but the Desktop engine is not ready. Start Docker Desktop, wait for `docker ps` to succeed, then retry Compose.
 - **Gateway `/healthz` is 200 but `/readyz` is 503:** the gateway process is alive but cannot validate the configured mock-provider health response. Check `SWITCHBOARD_MOCK_PROVIDER_URL` and the mock-provider logs.
+- **A completion returns `provider_timeout`:** identify which configured timeout is too short
+  before increasing it; do not disable timeout bounds.
+- **An incoming request ID changes:** only 1–64 characters from letters, digits, `.`, `_`, and `-`
+  are accepted; unsafe values are replaced.
 - **The e2e test is skipped:** this is expected during the ordinary unit/integration suite. Start both services and set `SWITCHBOARD_E2E=1` to opt into real-socket testing.
 - **`uv sync --locked` reports a stale lockfile:** run `uv lock`, review the dependency diff, and commit `uv.lock` only when the change is intentional.
 - **Port 8000 or 8001 is already in use:** stop the conflicting process or change both the published port and the corresponding smoke-test URL.

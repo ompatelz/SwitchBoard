@@ -1,10 +1,10 @@
 # Chat Completions API contract
 
-## Phase 1A status
+## Phase 1B status
 
-Phase 1A defines and tests the supported Chat Completions data contract. The deterministic
-mock provider serves that contract at `POST /v1/chat/completions`. The public gateway does not
-forward this endpoint until Phase 1B, so this document is not yet a gateway quick-start guide.
+The public gateway and deterministic mock provider both serve the supported contract at
+`POST /v1/chat/completions`. The gateway validates the request, assigns a request ID, forwards
+through one typed HTTP provider adapter, validates the provider response, and returns it.
 
 Compatibility is behavioral, not merely a matching URL. A compatible client must receive the
 expected validation behavior, field names, data types, response shape, and streaming semantics.
@@ -14,16 +14,16 @@ Switchboard claims compatibility only for the subset below.
 
 | Field | Type | Required | Rule |
 | --- | --- | --- | --- |
-| `model` | string | yes | Trimmed; 1 to 128 characters. The Phase 1A mock echoes this value. |
+| `model` | string | yes | Trimmed; 1 to 128 characters. The mock echoes this value. |
 | `messages` | array | yes | 1 to 64 text-only messages. |
 | `messages[].role` | string | yes | Exactly `system`, `user`, or `assistant`. |
 | `messages[].content` | string | yes | 1 to 32,768 characters and not whitespace-only. Meaningful whitespace is preserved. |
-| `stream` | boolean | no | Defaults to `false`; only `false` is accepted in Phase 1A. |
+| `stream` | boolean | no | Defaults to `false`; only `false` is accepted through Phase 1B. |
 
 Every model rejects unknown fields. Switchboard does not accept and silently ignore parameters
 whose semantics it has not implemented. For example, `temperature`, `max_tokens`, `tools`,
 `response_format`, multimodal content arrays, `name`, and `tool_calls` receive HTTP `422` from
-the Phase 1A mock boundary. `stream: true` is also rejected until Phase 1C.
+the gateway boundary. `stream: true` is also rejected until Phase 1C.
 
 Pydantic performs runtime validation at the HTTP boundary. Static type checking helps developers
 reason about Python code before execution, but it cannot validate untrusted JSON arriving over
@@ -68,16 +68,57 @@ experimental test metadata only, not output from any model tokenizer and not sui
 billing, quota, or cost claims. A real provider adapter must preserve or explicitly characterize
 the provider's accounting rather than treating these fixtures as truth.
 
-## Validation behavior
+## Request IDs
 
-The Phase 1A mock uses FastAPI's HTTP `422` validation response. Empty message arrays, invalid
-roles, blank or non-string content, over-limit values, `stream: true`, and unknown fields fail
-before mock generation runs. A stable public gateway error envelope is intentionally deferred to
-Phase 1B, where malformed JSON and downstream failures can be designed together.
+The gateway accepts `X-Request-ID` only when it contains 1–64 log-safe ASCII characters: letters,
+digits, `.`, `_`, and `-`, starting with a letter or digit. Missing or unsafe values are replaced
+with an opaque generated ID. The chosen ID is forwarded to the provider, returned in the response
+header, and included in gateway error details. It contains no user, host, or process information.
+
+## Validation and failure semantics
+
+Malformed JSON and structurally invalid requests are distinct. Empty message arrays, invalid
+roles, blank or non-string content, over-limit values, `stream: true`, and unknown fields all fail
+before provider communication.
+
+Gateway errors use this non-sensitive envelope:
+
+```json
+{
+  "error": {
+    "message": "The provider timed out.",
+    "type": "provider_error",
+    "code": "provider_timeout",
+    "request_id": "req_0123456789abcdef0123456789abcdef"
+  }
+}
+```
+
+| Condition | HTTP status | Stable code |
+| --- | ---: | --- |
+| Malformed JSON | 400 | `invalid_json` |
+| Request validation failure | 422 | `invalid_request` |
+| Provider rate limit | 429 | `provider_rate_limited` |
+| Provider connection failure | 502 | `provider_connection_error` |
+| Provider rejected a gateway-valid request | 502 | `provider_rejected_request` |
+| Invalid provider JSON/schema/status | 502 | `invalid_provider_response` |
+| Provider 5xx | 503 | `provider_unavailable` |
+| Connect, read, write, or pool timeout | 504 | `provider_timeout` |
+
+Provider URLs, response bodies, credentials, stack traces, and internal exception strings are not
+included. The gateway does not retry or fall back, so one client request causes at most one
+provider completion request in Phase 1B.
+
+## Timeouts and resource ownership
+
+Connect, read, write, and pool timeouts are separately configured with positive validated values.
+One `httpx.AsyncClient` and its connection pool are created by FastAPI lifespan, borrowed by the
+provider adapter for every request, and closed at application shutdown. Non-streaming responses
+are fully buffered, validated, and explicitly closed before the route returns. Cancellation is not
+caught by provider-error translation, so task cancellation can propagate to the HTTP operation.
 
 ## Compatibility limitations
 
-- The gateway does not expose the Chat Completions route yet; only the test mock does.
 - Only text content and the three documented roles are supported.
 - Exactly one non-streaming assistant choice is returned.
 - Streaming chunks, `[DONE]`, disconnect handling, and partial-stream rules arrive in Phase 1C.

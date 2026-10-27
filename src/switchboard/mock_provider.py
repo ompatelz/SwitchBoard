@@ -16,6 +16,7 @@ from switchboard.contracts import (
     CompletionUsage,
     HealthResponse,
 )
+from switchboard.request_ids import RequestIdMiddleware
 
 Prompt = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4096)]
 Seed = Annotated[int, Field(ge=0, le=4_294_967_295)]
@@ -98,6 +99,7 @@ def create_app() -> FastAPI:
         summary="Deterministic upstream simulator for Switchboard tests.",
         version=__version__,
     )
+    application.add_middleware(RequestIdMiddleware)
 
     @application.get(
         "/healthz",
