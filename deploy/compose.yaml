@@ -1,7 +1,7 @@
 name: switchboard
 
 x-switchboard-service: &switchboard-service
-  image: switchboard:phase-0
+  image: switchboard:phase-1
   init: true
   restart: "no"
 
@@ -46,7 +46,10 @@ services:
       - "8000"
     environment:
       SWITCHBOARD_MOCK_PROVIDER_URL: http://mock-provider:8001
-      SWITCHBOARD_UPSTREAM_TIMEOUT_SECONDS: "2.0"
+      SWITCHBOARD_UPSTREAM_CONNECT_TIMEOUT_SECONDS: "2.0"
+      SWITCHBOARD_UPSTREAM_READ_TIMEOUT_SECONDS: "10.0"
+      SWITCHBOARD_UPSTREAM_WRITE_TIMEOUT_SECONDS: "2.0"
+      SWITCHBOARD_UPSTREAM_POOL_TIMEOUT_SECONDS: "1.0"
     depends_on:
       mock-provider:
         condition: service_healthy

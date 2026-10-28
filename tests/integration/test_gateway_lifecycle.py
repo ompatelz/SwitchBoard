@@ -19,8 +19,14 @@ def test_lifespan_creates_and_closes_one_shared_client() -> None:
 
     with TestClient(application):
         client = application.state.http_client
+        provider = application.state.chat_provider
         assert isinstance(client, httpx.AsyncClient)
+        assert provider.client is client
         assert not client.is_closed
+        assert client.timeout.connect == 2.0
+        assert client.timeout.read == 10.0
+        assert client.timeout.write == 2.0
+        assert client.timeout.pool == 1.0
 
     assert client.is_closed
 
@@ -30,7 +36,10 @@ def test_readiness_uses_configured_shared_client() -> None:
     settings = GatewaySettings.model_validate(
         {
             "mock_provider_url": "http://mock-provider:8001",
-            "upstream_timeout_seconds": 1.0,
+            "upstream_connect_timeout_seconds": 1.0,
+            "upstream_read_timeout_seconds": 1.0,
+            "upstream_write_timeout_seconds": 1.0,
+            "upstream_pool_timeout_seconds": 1.0,
         }
     )
     application = create_app(

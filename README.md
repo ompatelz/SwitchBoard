@@ -8,9 +8,10 @@ LLM gateways can make routing and caching look simple while hiding difficult cor
 
 The project is a learning-focused, portfolio-grade backend and ML-systems implementation. Claims will be tied to reproducible tests and experiments rather than aspirational benchmark numbers.
 
-## Current scope: Phase 0C
+## Current scope: Phase 1 gateway MVP
 
-This branch currently provides the repository foundation and a runnable two-service slice:
+Phase 0 is merged and verified. This branch adds buffered and streaming Phase 1 gateway paths while
+preserving the runnable two-service foundation:
 
 - an installable `src/switchboard` Python package;
 - a reproducible `uv` environment and committed lockfile;
@@ -23,9 +24,19 @@ This branch currently provides the repository foundation and a runnable two-serv
 - deterministic mock responses with strict Pydantic validation;
 - one lifespan-managed, pooled `httpx.AsyncClient` in the gateway;
 - gateway `GET /readyz`, which verifies the configured mock provider over HTTP; and
-- one non-root container image plus Docker Compose health checks for both services.
+- one non-root container image plus Docker Compose health checks for both services;
+- strict Pydantic v2 models for the documented text-only Chat Completions subset; and
+- a deterministic OpenAI-shaped non-streaming fixture at the mock provider's
+  `POST /v1/chat/completions` route;
+- gateway `POST /v1/chat/completions` forwarding through a typed provider adapter;
+- one reused lifespan-managed HTTPX connection pool with explicit timeout categories;
+- safe request-ID acceptance/generation and cross-service propagation; and
+- stable non-sensitive errors for invalid input and provider failures;
+- OpenAI-compatible SSE chunks and `[DONE]` for `stream: true`;
+- honest partial-stream termination plus upstream cleanup on downstream cancellation; and
+- verified compatibility with the standard OpenAI Python SDK for buffered and streaming calls.
 
-This remains infrastructure proof, not a Chat Completions proxy. Phase 0D will audit and document the complete Phase 0 slice before the branch is pushed and opened as a PR.
+The gateway supports buffered and streaming Chat Completions for the documented text-only subset.
 
 ## HTTP contracts
 
@@ -33,8 +44,10 @@ This remains infrastructure proof, not a Chat Completions proxy. Phase 0D will a
 | --- | --- | --- |
 | Gateway | `GET /healthz` | `{"status":"ok","service":"gateway"}` |
 | Gateway | `GET /readyz` | `{"status":"ready","upstream":"mock-provider"}` when the mock provider is healthy |
+| Gateway | `POST /v1/chat/completions` | Validated JSON completion or SSE stream from the configured provider |
 | Mock provider | `GET /healthz` | `{"status":"ok","service":"mock-provider"}` |
 | Mock provider | `POST /generate` | Stable `id`, `model`, and `text` derived from the validated request |
+| Mock provider | `POST /v1/chat/completions` | Deterministic buffered or streaming Chat Completion fixture |
 
 `POST /generate` accepts this deliberately small request:
 
@@ -48,19 +61,25 @@ This remains infrastructure proof, not a Chat Completions proxy. Phase 0D will a
 
 `prompt` is trimmed and must contain 1–4096 characters. `model` can only be `mock-v1`; `seed` must be an integer from 0 through 4,294,967,295. Unknown fields are rejected. Invalid requests currently use FastAPI's documented validation response with HTTP `422`; this is a mock-only contract, not an OpenAI error-compatibility claim.
 
-## Explicit non-goals for Phase 0C
+The exact supported Chat Completions fields, limits, and response shape are documented in
+[`docs/api-contract.md`](docs/api-contract.md).
 
-Phase 0C does **not** include:
+## Explicit non-goals for Phase 1
 
-- a `/v1/chat/completions` endpoint or any provider proxying;
+Phase 1 does **not** include:
+
 - Redis, PostgreSQL, Qdrant, semantic caching, or model routing;
-- Chat Completions forwarding, response proxying, retries, or SSE streaming;
+- retries, fallback routing, or circuit breakers;
+- tenant authentication or multiple real providers;
 - a dashboard, Kubernetes, Kafka, or paid-provider integration; or
 - performance, cost-saving, or production-readiness claims.
 
 ## Verified status
 
-The exact checks run for this subphase are recorded in [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md). Both applications have been exercised over local Uvicorn sockets and as healthy Docker Compose services. The gateway reached the mock provider through Compose DNS, the end-to-end smoke test passed, and Compose shut down both containers cleanly. GitHub-hosted CI remains unverified until this branch is pushed.
+The exact checks run for this subphase are recorded in [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md).
+Phase 0's local, container, and hosted checks passed before merge. Phase 1's exact local, SDK, and
+Compose results are recorded in the status document. Hosted Phase 1 checks are reported only after
+the branch is pushed and its pull request is created.
 
 ## Local development
 
@@ -113,7 +132,48 @@ Invoke-RestMethod -Method Post `
   -Uri http://127.0.0.1:8001/generate `
   -ContentType application/json `
   -Body '{"prompt":"Explain ASGI","model":"mock-v1","seed":7}'
+Invoke-RestMethod -Method Post `
+  -Uri http://127.0.0.1:8000/v1/chat/completions `
+  -Headers @{ "X-Request-ID" = "readme-example-1" } `
+  -ContentType application/json `
+  -Body '{"model":"mock-v1","messages":[{"role":"user","content":"Explain ASGI"}]}'
+curl.exe --no-buffer http://127.0.0.1:8000/v1/chat/completions `
+  -H "Content-Type: application/json" `
+  -d '{"model":"mock-v1","messages":[{"role":"user","content":"Explain ASGI"}],"stream":true}'
 ```
+
+The streaming response ends with `data: [DONE]`. If a partial stream closes without that sentinel,
+treat the completion as incomplete; the gateway does not retry or splice another provider after
+output begins.
+
+### OpenAI Python SDK
+
+With both local services running, execute the checked-in SDK example:
+
+```powershell
+uv run python examples/openai_sdk_chat.py
+```
+
+Its essential client configuration is:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://127.0.0.1:8000/v1",
+    api_key="switchboard-local-placeholder",
+    max_retries=0,
+    timeout=5.0,
+)
+```
+
+The placeholder satisfies the SDK constructor but is not authentication: Phase 1 has no tenant
+auth. Disabling SDK retries keeps the baseline behavior observable and avoids confusing client-side
+retries with gateway behavior. The complete example closes the SDK client with a context manager
+and demonstrates both buffered and streaming calls. This follows the official
+[Python client configuration](https://developers.openai.com/api/reference/python) and
+[Chat Completions streaming](https://developers.openai.com/api/docs/guides/streaming-responses)
+patterns while targeting Switchboard's intentionally smaller contract.
 
 ## Docker Compose
 
@@ -139,12 +199,24 @@ docker compose -f deploy/compose.yaml down --timeout 15
 
 Compose sets `SWITCHBOARD_MOCK_PROVIDER_URL=http://mock-provider:8001`. The hostname is the Compose service name: `localhost` inside the gateway container would incorrectly point back to the gateway container itself.
 
-`.env.example` documents the two environment variables currently read by the gateway. Set them in the shell or through a process/container environment; the application does not silently load `.env` files. Never commit `.env` or real credentials.
+`.env.example` documents the provider URL plus connect, read, write, and pool timeouts currently
+read by the gateway. Set them in the shell or through a process/container environment; the
+application does not silently load `.env` files. Never commit `.env` or real credentials.
 
 ## Troubleshooting
 
 - **Docker reports a missing `dockerDesktopLinuxEngine` pipe:** Docker's CLI is installed, but the Desktop engine is not ready. Start Docker Desktop, wait for `docker ps` to succeed, then retry Compose.
 - **Gateway `/healthz` is 200 but `/readyz` is 503:** the gateway process is alive but cannot validate the configured mock-provider health response. Check `SWITCHBOARD_MOCK_PROVIDER_URL` and the mock-provider logs.
+- **A completion returns `provider_timeout`:** identify which configured timeout is too short
+  before increasing it; do not disable timeout bounds.
+- **An incoming request ID changes:** only 1–64 characters from letters, digits, `.`, `_`, and `-`
+  are accepted; unsafe values are replaced.
+- **The SDK calls `/v1/v1/chat/completions`:** set `base_url` to exactly the gateway URL plus one
+  `/v1` suffix, as shown above.
+- **The SDK rejects an empty API key:** use the documented local placeholder. It grants no access
+  because authentication is deferred, not implemented.
+- **An SDK failure appears more than once:** set `max_retries=0` while diagnosing the Phase 1
+  baseline; current SDK defaults may retry selected connection and HTTP failures.
 - **The e2e test is skipped:** this is expected during the ordinary unit/integration suite. Start both services and set `SWITCHBOARD_E2E=1` to opt into real-socket testing.
 - **`uv sync --locked` reports a stale lockfile:** run `uv lock`, review the dependency diff, and commit `uv.lock` only when the change is intentional.
 - **Port 8000 or 8001 is already in use:** stop the conflicting process or change both the published port and the corresponding smoke-test URL.
@@ -153,5 +225,6 @@ Compose sets `SWITCHBOARD_MOCK_PROVIDER_URL=http://mock-provider:8001`. The host
 
 - [`docs/BUILD_CONTRACT.md`](docs/BUILD_CONTRACT.md) — project source of truth supplied by the owner
 - [`docs/architecture.md`](docs/architecture.md) — current and immediately planned architecture
+- [`docs/api-contract.md`](docs/api-contract.md) — exact supported Chat Completions subset
 - [`docs/adr/0001-python-fastapi-chat-completions.md`](docs/adr/0001-python-fastapi-chat-completions.md) — initial architecture decision
 - [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) — verified implementation status and handoff log
