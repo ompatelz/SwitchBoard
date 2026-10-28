@@ -4,7 +4,7 @@
 
 - **Phase:** 1 — Real working gateway MVP
 - **Subphase:** 1D — SDK compatibility and MVP acceptance gate
-- **State:** Local acceptance complete; final commit, push, PR, and hosted checks pending
+- **State:** Complete; branch pushed, PR #2 open and intentionally unmerged, hosted checks green
 - **Updated:** 2026-10-28 (Asia/Calcutta)
 
 ## Completed behavior
@@ -183,6 +183,9 @@ Phase 1D verification:
 | Compose logs and cleanup | No application error appeared; both containers and the scoped network were removed. |
 | Tracked-artifact scan | No environment, cache, build output, bytecode, or log artifact is tracked. |
 | High-confidence secret scan | No private-key block or common live credential pattern was found. |
+| Branch push | Local and remote `codex/phase-1-gateway-mvp` matched at implementation SHA `a6d73b9`. |
+| Pull request | [PR #2](https://github.com/ompatelz/SwitchBoard/pull/2) opened as non-draft, open, mergeable, and intentionally unmerged. |
+| Initial hosted `quality` and `compose-smoke` checks | Passed for both push and pull-request events on the implementation head. |
 
 Phase 1C verification:
 
@@ -292,10 +295,9 @@ Phase 0D clean-start verification:
 - Compatibility covers only the documented Chat Completions subset, not every parameter exposed
   by the OpenAI SDK.
 - No deployment target exists, so CD remains intentionally absent.
-- The Phase 1 branch is not pushed and has no PR or hosted CI.
+- Phase 1 has no deployment target; PR #2 is intentionally unmerged pending owner review.
 
 ## Next subphase
 
-Phase 1 is locally complete once the final integrity checks and cleanup pass. Push the verified
-branch, open the Phase 1 PR without merging, inspect visible hosted checks, then stop. Phase 2A is
-proposal-only until the owner explicitly starts it.
+Phase 1 is complete and awaiting owner review in PR #2. Do not merge or start Phase 2 without the
+owner's instruction. Phase 2A remains proposal-only.
