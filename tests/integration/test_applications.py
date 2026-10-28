@@ -68,14 +68,6 @@ def test_mock_chat_completions_endpoint_is_deterministic() -> None:
             {
                 "model": "mock-v1",
                 "messages": [{"role": "user", "content": "x"}],
-                "stream": True,
-            },
-            "literal_error",
-        ),
-        (
-            {
-                "model": "mock-v1",
-                "messages": [{"role": "user", "content": "x"}],
                 "max_tokens": 10,
             },
             "extra_forbidden",
@@ -91,6 +83,24 @@ def test_mock_chat_completions_rejects_invalid_requests(
 
     assert response.status_code == 422
     assert response.json()["detail"][0]["type"] == error_type
+
+
+def test_mock_chat_completions_streams_deterministic_sse() -> None:
+    """The mock emits fragmented frames that reassemble into chunks and [DONE]."""
+    payload = {
+        "model": "mock-v1",
+        "messages": [{"role": "user", "content": "Explain ASGI"}],
+        "stream": True,
+    }
+
+    with TestClient(create_mock_provider_app()) as client:
+        response = client.post("/v1/chat/completions", json=payload)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    events = [line[6:] for line in response.text.splitlines() if line.startswith("data: ")]
+    assert events[-1] == "[DONE]"
+    assert len(events) == 6
 
 
 @pytest.mark.parametrize(

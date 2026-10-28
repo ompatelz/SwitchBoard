@@ -8,9 +8,9 @@ LLM gateways can make routing and caching look simple while hiding difficult cor
 
 The project is a learning-focused, portfolio-grade backend and ML-systems implementation. Claims will be tied to reproducible tests and experiments rather than aspirational benchmark numbers.
 
-## Current scope: Phase 1B
+## Current scope: Phase 1C
 
-Phase 0 is merged and verified. This branch adds the non-streaming Phase 1 gateway path while
+Phase 0 is merged and verified. This branch adds buffered and streaming Phase 1 gateway paths while
 preserving the runnable two-service foundation:
 
 - an installable `src/switchboard` Python package;
@@ -31,9 +31,11 @@ preserving the runnable two-service foundation:
 - gateway `POST /v1/chat/completions` forwarding through a typed provider adapter;
 - one reused lifespan-managed HTTPX connection pool with explicit timeout categories;
 - safe request-ID acceptance/generation and cross-service propagation; and
-- stable non-sensitive errors for invalid input and provider failures.
+- stable non-sensitive errors for invalid input and provider failures;
+- OpenAI-compatible SSE chunks and `[DONE]` for `stream: true`; and
+- honest partial-stream termination plus upstream cleanup on downstream cancellation.
 
-The gateway supports non-streaming Chat Completions only. SSE belongs to Phase 1C.
+The gateway supports buffered and streaming Chat Completions for the documented text-only subset.
 
 ## HTTP contracts
 
@@ -41,10 +43,10 @@ The gateway supports non-streaming Chat Completions only. SSE belongs to Phase 1
 | --- | --- | --- |
 | Gateway | `GET /healthz` | `{"status":"ok","service":"gateway"}` |
 | Gateway | `GET /readyz` | `{"status":"ready","upstream":"mock-provider"}` when the mock provider is healthy |
-| Gateway | `POST /v1/chat/completions` | Validated non-streaming Chat Completion from the configured provider |
+| Gateway | `POST /v1/chat/completions` | Validated JSON completion or SSE stream from the configured provider |
 | Mock provider | `GET /healthz` | `{"status":"ok","service":"mock-provider"}` |
 | Mock provider | `POST /generate` | Stable `id`, `model`, and `text` derived from the validated request |
-| Mock provider | `POST /v1/chat/completions` | Deterministic non-streaming Chat Completion fixture |
+| Mock provider | `POST /v1/chat/completions` | Deterministic buffered or streaming Chat Completion fixture |
 
 `POST /generate` accepts this deliberately small request:
 
@@ -61,12 +63,12 @@ The gateway supports non-streaming Chat Completions only. SSE belongs to Phase 1
 The exact supported Chat Completions fields, limits, and response shape are documented in
 [`docs/api-contract.md`](docs/api-contract.md).
 
-## Explicit non-goals for Phase 1B
+## Explicit non-goals for Phase 1C
 
-Phase 1B does **not** include:
+Phase 1C does **not** include:
 
 - Redis, PostgreSQL, Qdrant, semantic caching, or model routing;
-- retries, fallback routing, circuit breakers, or SSE streaming;
+- retries, fallback routing, or circuit breakers;
 - tenant authentication or multiple real providers;
 - a dashboard, Kubernetes, Kafka, or paid-provider integration; or
 - performance, cost-saving, or production-readiness claims.
@@ -74,7 +76,7 @@ Phase 1B does **not** include:
 ## Verified status
 
 The exact checks run for this subphase are recorded in [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md).
-Phase 0's local, container, and hosted checks passed before merge. Phase 1B's exact local and
+Phase 0's local, container, and hosted checks passed before merge. Phase 1C's exact local and
 Compose results are recorded in the status document; this branch has not been pushed and has no
 hosted Phase 1 checks yet.
 
@@ -134,7 +136,14 @@ Invoke-RestMethod -Method Post `
   -Headers @{ "X-Request-ID" = "readme-example-1" } `
   -ContentType application/json `
   -Body '{"model":"mock-v1","messages":[{"role":"user","content":"Explain ASGI"}]}'
+curl.exe --no-buffer http://127.0.0.1:8000/v1/chat/completions `
+  -H "Content-Type: application/json" `
+  -d '{"model":"mock-v1","messages":[{"role":"user","content":"Explain ASGI"}],"stream":true}'
 ```
+
+The streaming response ends with `data: [DONE]`. If a partial stream closes without that sentinel,
+treat the completion as incomplete; the gateway does not retry or splice another provider after
+output begins.
 
 ## Docker Compose
 

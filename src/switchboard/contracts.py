@@ -48,11 +48,11 @@ class ChatMessage(StrictContract):
 
 
 class ChatCompletionRequest(StrictContract):
-    """Supported Phase 1A request subset; streaming arrives in Phase 1C."""
+    """Supported Chat Completions request subset."""
 
     model: ModelName
     messages: ChatMessages
-    stream: Literal[False] = False
+    stream: bool = False
 
 
 class AssistantMessage(StrictContract):
@@ -87,6 +87,31 @@ class ChatCompletionResponse(StrictContract):
     model: str
     choices: Annotated[list[ChatCompletionChoice], Field(min_length=1, max_length=1)]
     usage: CompletionUsage
+
+
+class ChatCompletionDelta(StrictContract):
+    """Incremental assistant fields carried by one streaming choice."""
+
+    role: Literal["assistant"] | None = None
+    content: str | None = None
+
+
+class ChatCompletionChunkChoice(StrictContract):
+    """The single incremental choice in a supported streaming chunk."""
+
+    index: Literal[0] = 0
+    delta: ChatCompletionDelta
+    finish_reason: Literal["stop"] | None = None
+
+
+class ChatCompletionChunk(StrictContract):
+    """OpenAI-compatible streaming chunk for the supported subset."""
+
+    id: str
+    object: Literal["chat.completion.chunk"] = "chat.completion.chunk"
+    created: Annotated[int, Field(ge=0)]
+    model: str
+    choices: Annotated[list[ChatCompletionChunkChoice], Field(min_length=1, max_length=1)]
 
 
 class ErrorDetail(StrictContract):

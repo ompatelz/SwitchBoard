@@ -2,11 +2,11 @@
 
 ## Status and scope
 
-This document describes the merged Phase 0 foundation plus the Phase 1B non-streaming gateway. The
+This document describes the merged Phase 0 foundation plus the Phase 1C streaming gateway. The
 broader product direction remains in [`BUILD_CONTRACT.md`](BUILD_CONTRACT.md); it is not an
 assertion that those systems already exist.
 
-## Current architecture: Phase 1B
+## Current architecture: Phase 1C
 
 The current system is an installable Python distribution containing two independent FastAPI/ASGI applications connected by one minimal readiness request:
 
@@ -15,6 +15,7 @@ client -- GET /healthz --> gateway application
 client -- GET /readyz --> gateway -- shared AsyncClient --> mock GET /healthz
 client -- POST /v1/chat/completions --> gateway validation --> provider adapter
   --> shared AsyncClient --> mock POST /v1/chat/completions --> validated response
+client -- stream:true --> gateway preflight first SSE event --> async forwarding --> [DONE]
 
 test client -- GET /healthz --> mock-provider application
 test client -- POST /generate --> validation --> SHA-256 derivation --> mock response
@@ -34,7 +35,7 @@ flowchart LR
     C -->|GET /readyz| G
     C -->|POST /generate| M[Mock-provider FastAPI app]
     C -->|POST /v1/chat/completions| G
-    G -->|ChatProvider and shared HTTPX client| M
+    G -->|buffered JSON or SSE through ChatProvider| M
     G -->|shared HTTPX client: GET /healthz| M
     L[Gateway lifespan] -->|create at startup| H[AsyncClient connection pool]
     H --> G
@@ -58,7 +59,7 @@ gateway: POST /v1/chat/completions
   -> strict ChatCompletionRequest validation
   -> injected ChatProvider protocol
   -> HttpxMockProvider using shared AsyncClient
-  -> validated ChatCompletionResponse or stable gateway error
+  -> validated ChatCompletionResponse, validated SSE stream, or stable preflight error
   -> request ID response header
 
 mock: POST /generate
@@ -72,8 +73,8 @@ mock: POST /v1/chat/completions
   -> strict ChatCompletionRequest validation
   -> canonical JSON serialization
   -> SHA-256 digest and controlled metadata fixtures
-  -> ChatCompletionResponse
-  -> JSON 200
+  -> ChatCompletionResponse JSON or deterministic fragmented SSE
+  -> JSON 200 or role/content/finish chunks followed by [DONE]
 ```
 
 Gateway validation failure stops before provider communication and produces the documented stable
@@ -85,8 +86,13 @@ boundary, not the public gateway.
 The gateway's lifespan context creates one `httpx.AsyncClient` before accepting requests, stores it
 in application state, gives the provider adapter a borrowed reference, and closes it after the
 lifespan exits. Readiness and completion requests reuse that client and connection pool. Buffered
-provider responses are explicitly closed after validation. Tests prove adapter/client identity,
-response-body closure, and final client shutdown without relying on garbage collection.
+provider responses are explicitly closed after validation. A streaming adapter owns its open
+response, prefetched first event, and SSE parser until the gateway generator completes or is
+cancelled. The generator yields only when the downstream server requests another item, naturally
+coupling upstream reads to downstream backpressure. Its `finally` block closes the adapter on
+success, provider failure, or client disconnect. Tests prove adapter/client identity,
+response-body closure, real-socket cancellation cleanup, and final client shutdown without relying
+on garbage collection.
 
 Creating a client per request was rejected because it would discard connection pooling and make socket cleanup harder. CPU work and synchronous blocking calls remain prohibited on the event loop in later phases.
 
@@ -94,14 +100,17 @@ Creating a client per request was rejected because it would discard connection p
 
 Both services use one locked, non-root image, built once from the mock-provider service definition and reused by the gateway. Compose starts the mock provider first, waits for its `/healthz`, then starts the gateway with `SWITCHBOARD_MOCK_PROVIDER_URL=http://mock-provider:8001`. Gateway health checks call `/readyz`, proving service discovery and upstream reachability rather than process liveness alone. Only ports 8000 and 8001 are published to host loopback.
 
-## Immediately planned architecture: Phase 1C
+## Streaming failure boundary
 
-Phase 1C will add correctly scoped upstream streaming, SSE framing, `[DONE]`, backpressure,
-disconnect cancellation, partial-stream failure rules, and real-network cancellation tests.
+The provider adapter validates HTTP status, `text/event-stream`, and the first logical SSE event
+before the public response starts. A failure there remains a normal JSON error. Once output starts,
+HTTP status is committed: a later provider failure closes the partial response without `[DONE]`,
+usage, retry, fallback, or cross-provider splicing. Missing `[DONE]` is therefore an explicit signal
+that completion is unknown.
 
 ## Deferred architecture
 
 Redis, PostgreSQL, Qdrant, authentication, tenant budgets, semantic caching, policy routing,
-circuit breakers, metrics infrastructure, replay evaluation, SSE, and production deployment remain
+circuit breakers, metrics infrastructure, replay evaluation, and production deployment remain
 deferred. Their appearance in the build contract is roadmap context, not current implementation
 status.

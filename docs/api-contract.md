@@ -1,10 +1,11 @@
 # Chat Completions API contract
 
-## Phase 1B status
+## Phase 1C status
 
 The public gateway and deterministic mock provider both serve the supported contract at
 `POST /v1/chat/completions`. The gateway validates the request, assigns a request ID, forwards
-through one typed HTTP provider adapter, validates the provider response, and returns it.
+through one typed HTTP provider adapter, validates the provider response, and returns buffered JSON
+or a validated Server-Sent Events stream.
 
 Compatibility is behavioral, not merely a matching URL. A compatible client must receive the
 expected validation behavior, field names, data types, response shape, and streaming semantics.
@@ -18,12 +19,12 @@ Switchboard claims compatibility only for the subset below.
 | `messages` | array | yes | 1 to 64 text-only messages. |
 | `messages[].role` | string | yes | Exactly `system`, `user`, or `assistant`. |
 | `messages[].content` | string | yes | 1 to 32,768 characters and not whitespace-only. Meaningful whitespace is preserved. |
-| `stream` | boolean | no | Defaults to `false`; only `false` is accepted through Phase 1B. |
+| `stream` | boolean | no | Defaults to `false`; `true` selects SSE streaming. |
 
 Every model rejects unknown fields. Switchboard does not accept and silently ignore parameters
 whose semantics it has not implemented. For example, `temperature`, `max_tokens`, `tools`,
 `response_format`, multimodal content arrays, `name`, and `tool_calls` receive HTTP `422` from
-the gateway boundary. `stream: true` is also rejected until Phase 1C.
+the gateway boundary.
 
 Pydantic performs runtime validation at the HTTP boundary. Static type checking helps developers
 reason about Python code before execution, but it cannot validate untrusted JSON arriving over
@@ -68,6 +69,42 @@ experimental test metadata only, not output from any model tokenizer and not sui
 billing, quota, or cost claims. A real provider adapter must preserve or explicitly characterize
 the provider's accounting rather than treating these fixtures as truth.
 
+## Streaming response
+
+`stream: true` returns `Content-Type: text/event-stream`. Each validated chunk is one SSE data
+event followed by a blank line:
+
+```text
+data: {"id":"chatcmpl-mock-...","object":"chat.completion.chunk","created":1700000000,"model":"mock-v1","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-mock-...","object":"chat.completion.chunk","created":1700000000,"model":"mock-v1","choices":[{"index":0,"delta":{"content":"Deterministic ..."},"finish_reason":null}]}
+
+data: [DONE]
+
+```
+
+Network packet boundaries are irrelevant: one SSE event may arrive across multiple reads, and
+several events may arrive in one read. Clients must parse blank-line-delimited SSE events rather
+than treating each TCP read as one chunk. The gateway validates the upstream content type and
+first event before committing HTTP 200, then emits downstream events as they are consumed. This
+preserves backpressure instead of buffering the complete response.
+
+The deterministic mock emits a role chunk, content deltas, a final choice with
+`finish_reason: "stop"`, and then `[DONE]`. Streaming chunks omit `usage`; Switchboard does not
+invent token or cost values when the stream does not supply trustworthy accounting.
+
+Failure meaning depends on whether output has started:
+
+- Before the first validated event, the gateway can return the stable JSON error and appropriate
+  non-200 status from the table below.
+- After HTTP 200 or partial output, the status cannot be changed. A provider failure ends the
+  connection without `[DONE]` and without usage. Absence of `[DONE]` means incomplete/unknown,
+  not successful completion.
+- Switchboard never retries, switches providers, or splices a second response after any streamed
+  output. Such a response could mix incompatible continuations and double cost.
+- If the downstream client disconnects, ASGI cancellation propagates through the generator and
+  its `finally` block closes the upstream HTTP response.
+
 ## Request IDs
 
 The gateway accepts `X-Request-ID` only when it contains 1–64 log-safe ASCII characters: letters,
@@ -78,7 +115,7 @@ header, and included in gateway error details. It contains no user, host, or pro
 ## Validation and failure semantics
 
 Malformed JSON and structurally invalid requests are distinct. Empty message arrays, invalid
-roles, blank or non-string content, over-limit values, `stream: true`, and unknown fields all fail
+roles, blank or non-string content, over-limit values, non-boolean `stream`, and unknown fields all fail
 before provider communication.
 
 Gateway errors use this non-sensitive envelope:
@@ -107,21 +144,23 @@ Gateway errors use this non-sensitive envelope:
 
 Provider URLs, response bodies, credentials, stack traces, and internal exception strings are not
 included. The gateway does not retry or fall back, so one client request causes at most one
-provider completion request in Phase 1B.
+provider completion request in Phase 1C.
 
 ## Timeouts and resource ownership
 
 Connect, read, write, and pool timeouts are separately configured with positive validated values.
 One `httpx.AsyncClient` and its connection pool are created by FastAPI lifespan, borrowed by the
 provider adapter for every request, and closed at application shutdown. Non-streaming responses
-are fully buffered, validated, and explicitly closed before the route returns. Cancellation is not
-caught by provider-error translation, so task cancellation can propagate to the HTTP operation.
+are fully buffered, validated, and explicitly closed before the route returns. Streaming responses
+transfer response ownership to an async generator; normal completion, mid-stream failure, and
+downstream cancellation all close that response in `finally`. Cancellation is not caught by
+provider-error translation, so task cancellation can propagate to the HTTP operation.
 
 ## Compatibility limitations
 
 - Only text content and the three documented roles are supported.
-- Exactly one non-streaming assistant choice is returned.
-- Streaming chunks, `[DONE]`, disconnect handling, and partial-stream rules arrive in Phase 1C.
+- Exactly one assistant choice is returned in buffered and streaming modes.
+- Streaming supports the documented one-line `data:` subset; extension event types are rejected.
 - Temperature, token limits, tools, structured outputs, log probabilities, multiple choices,
   multimodal inputs, and provider-specific options are unsupported.
 - The deterministic mock does not run an LLM and makes no quality or tokenizer-accuracy claim.

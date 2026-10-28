@@ -17,6 +17,7 @@ from switchboard.contracts import (
 )
 from switchboard.gateway import create_app, get_chat_provider
 from switchboard.mock_provider import create_app as create_mock_provider_app
+from switchboard.provider import ChatProviderStream
 from switchboard.request_ids import REQUEST_ID_HEADER, REQUEST_ID_PATTERN
 
 VALID_REQUEST = {
@@ -119,6 +120,12 @@ class FakeProvider:
             choices=[ChatCompletionChoice(message=AssistantMessage(content="fake response"))],
             usage=CompletionUsage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
         )
+
+    async def open_stream(
+        self, request: ChatCompletionRequest, *, request_id: str
+    ) -> ChatProviderStream:
+        """Fail loudly if a non-streaming dependency test selects the wrong path."""
+        raise AssertionError("streaming path was not expected")
 
 
 def test_provider_dependency_can_be_replaced_without_networking() -> None:

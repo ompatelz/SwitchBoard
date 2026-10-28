@@ -8,11 +8,12 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, StreamingResponse
 
 from switchboard import __version__
 from switchboard.config import GatewaySettings
 from switchboard.contracts import (
+    ChatCompletionChunk,
     ChatCompletionRequest,
     ChatCompletionResponse,
     ErrorDetail,
@@ -22,9 +23,10 @@ from switchboard.contracts import (
 )
 from switchboard.provider import (
     ChatProvider,
+    ChatProviderStream,
     HttpxMockProvider,
-    InvalidProviderResponseError,
     ProviderConnectionError,
+    ProviderError,
     ProviderRateLimitError,
     ProviderRejectedRequestError,
     ProviderServerError,
@@ -72,6 +74,71 @@ def error_response(request: Request, error: GatewayError) -> JSONResponse:
         )
     )
     return JSONResponse(status_code=error.status_code, content=body.model_dump(mode="json"))
+
+
+def provider_gateway_error(error: ProviderError) -> GatewayError:
+    """Map one expected provider failure without exposing its internal details."""
+    if isinstance(error, ProviderTimeoutError):
+        return GatewayError(504, "provider_timeout", "The provider timed out.", "provider_error")
+    if isinstance(error, ProviderConnectionError):
+        return GatewayError(
+            502,
+            "provider_connection_error",
+            "The provider could not be reached.",
+            "provider_error",
+        )
+    if isinstance(error, ProviderRateLimitError):
+        return GatewayError(
+            429,
+            "provider_rate_limited",
+            "The provider is rate limited.",
+            "provider_error",
+        )
+    if isinstance(error, ProviderRejectedRequestError):
+        return GatewayError(
+            502,
+            "provider_rejected_request",
+            "The provider rejected the validated request.",
+            "provider_error",
+        )
+    if isinstance(error, ProviderServerError):
+        return GatewayError(
+            503,
+            "provider_unavailable",
+            "The provider is unavailable.",
+            "provider_error",
+        )
+    return GatewayError(
+        502,
+        "invalid_provider_response",
+        "The provider returned an invalid response.",
+        "provider_error",
+    )
+
+
+def encode_sse_event(event: ChatCompletionChunk | Literal["[DONE]"]) -> bytes:
+    """Encode one validated stream event using OpenAI-compatible SSE framing."""
+    if event == "[DONE]":
+        return b"data: [DONE]\n\n"
+    data = event.model_dump_json(exclude_none=True)
+    return f"data: {data}\n\n".encode()
+
+
+async def stream_provider_events(
+    provider_stream: ChatProviderStream,
+) -> AsyncIterator[bytes]:
+    """Forward under backpressure and close upstream on completion or cancellation."""
+    try:
+        try:
+            async for event in provider_stream:
+                yield encode_sse_event(event)
+                if event == "[DONE]":
+                    return
+        except ProviderError:
+            # Headers/output have started: terminate without [DONE], usage, or fallback.
+            return
+    finally:
+        await provider_stream.aclose()
 
 
 def create_app(
@@ -166,55 +233,33 @@ def create_app(
         "/v1/chat/completions",
         response_model=ChatCompletionResponse,
         responses={status: {"model": ErrorResponse} for status in (400, 422, 429, 502, 503, 504)},
-        summary="Create one non-streaming Chat Completion",
+        summary="Create one buffered or streaming Chat Completion",
         tags=["chat"],
     )
     async def chat_completions(
         request_body: ChatCompletionRequest,
         request: Request,
         provider: Annotated[ChatProvider, Depends(get_chat_provider)],
-    ) -> ChatCompletionResponse:
-        """Validate, correlate, forward, and validate one provider completion."""
+    ) -> ChatCompletionResponse | StreamingResponse:
+        """Validate, correlate, and forward one buffered or streaming completion."""
         try:
-            return await provider.complete(request_body, request_id=request_id_from(request))
-        except ProviderTimeoutError as exc:
-            raise GatewayError(
-                504, "provider_timeout", "The provider timed out.", "provider_error"
-            ) from exc
-        except ProviderConnectionError as exc:
-            raise GatewayError(
-                502,
-                "provider_connection_error",
-                "The provider could not be reached.",
-                "provider_error",
-            ) from exc
-        except ProviderRateLimitError as exc:
-            raise GatewayError(
-                429,
-                "provider_rate_limited",
-                "The provider is rate limited.",
-                "provider_error",
-            ) from exc
-        except ProviderRejectedRequestError as exc:
-            raise GatewayError(
-                502,
-                "provider_rejected_request",
-                "The provider rejected the validated request.",
-                "provider_error",
-            ) from exc
-        except ProviderServerError as exc:
-            raise GatewayError(
-                503,
-                "provider_unavailable",
-                "The provider is unavailable.",
-                "provider_error",
-            ) from exc
-        except InvalidProviderResponseError as exc:
-            raise GatewayError(
-                502,
-                "invalid_provider_response",
-                "The provider returned an invalid response.",
-                "provider_error",
-            ) from exc
+            if not request_body.stream:
+                return await provider.complete(request_body, request_id=request_id_from(request))
+            provider_stream = await provider.open_stream(
+                request_body,
+                request_id=request_id_from(request),
+            )
+        except ProviderError as exc:
+            raise provider_gateway_error(exc) from exc
+
+        return StreamingResponse(
+            stream_provider_events(provider_stream),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     return application

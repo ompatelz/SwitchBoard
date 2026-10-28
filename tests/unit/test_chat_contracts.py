@@ -24,6 +24,19 @@ def test_supported_request_applies_non_streaming_default() -> None:
     assert [message.role for message in request.messages] == ["system", "user", "assistant"]
 
 
+def test_streaming_request_is_explicitly_supported() -> None:
+    """A strict JSON boolean enables the Phase 1C streaming path."""
+    request = ChatCompletionRequest.model_validate(
+        {
+            "model": "mock-v1",
+            "messages": [{"role": "user", "content": "stream this"}],
+            "stream": True,
+        }
+    )
+
+    assert request.stream is True
+
+
 @pytest.mark.parametrize(
     ("payload", "error_type"),
     [
@@ -52,9 +65,9 @@ def test_supported_request_applies_non_streaming_default() -> None:
             {
                 "model": "mock-v1",
                 "messages": [{"role": "user", "content": "hello"}],
-                "stream": True,
+                "stream": 1,
             },
-            "literal_error",
+            "bool_type",
         ),
         (
             {

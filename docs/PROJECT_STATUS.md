@@ -3,15 +3,15 @@
 ## Current phase
 
 - **Phase:** 1 — Real working gateway MVP
-- **Subphase:** 1B — Non-streaming gateway and provider adapter
-- **State:** Complete locally, including Docker Compose acceptance; not pushed and no Phase 1 PR yet
+- **Subphase:** 1C — SSE streaming, cancellation, and cleanup
+- **State:** Complete locally, including real-network and Docker Compose acceptance; not pushed
 - **Updated:** 2026-10-28 (Asia/Calcutta)
 
 ## Completed behavior
 
 - Phase 0 PR #1 merged into `main` at `3f2fc925`; its quality and Compose checks passed.
 - Phase 1 work is isolated on `codex/phase-1-gateway-mvp` from that verified merge.
-- Strict Pydantic v2 request models accept only `model`, `messages`, and non-streaming `stream`.
+- Strict Pydantic v2 request models accept only `model`, `messages`, and boolean `stream`.
 - Text-only `system`, `user`, and `assistant` messages are supported with explicit count and
   content bounds; blank content and unknown fields are rejected.
 - OpenAI-shaped non-streaming response contracts cover the completion object, one choice,
@@ -21,7 +21,7 @@
   and documented word-count usage fixtures keep tests deterministic.
 - `docs/api-contract.md` records supported fields, defaults, validation, unsupported capabilities,
   response structure, and compatibility limitations.
-- Public gateway `POST /v1/chat/completions` validates and forwards non-streaming requests.
+- Public gateway `POST /v1/chat/completions` validates and forwards buffered or streaming requests.
 - A minimal `ChatProvider` protocol separates the route from `HttpxMockProvider` without a plugin
   framework.
 - FastAPI dependency injection permits a typed provider replacement in tests.
@@ -33,6 +33,15 @@
   invalid provider responses have stable non-sensitive error mappings.
 - Buffered provider responses are explicitly closed, the shared client closes at shutdown, and
   cancellation escapes provider error translation.
+- `stream: true` returns validated OpenAI-shaped `chat.completion.chunk` SSE events followed by
+  `[DONE]`; packet fragments are reassembled before schema validation.
+- The provider adapter validates status, content type, and the first event before public HTTP 200.
+- Streaming reads are demand-driven for backpressure; normal completion, provider failure, and
+  downstream cancellation all close the upstream response.
+- Mid-stream failure terminates without `[DONE]`, fabricated usage, retry, fallback, or response
+  splicing; clients can distinguish incomplete output from success.
+- The mock provider has deterministic normal, delayed, slow, pre-first-failure, and
+  mid-stream-failure scenarios plus cleanup counters used by real-socket tests.
 
 - Phase 0 development was based on synchronized `main` and isolated on
   `codex/phase-0-foundation` before merge.
@@ -149,6 +158,24 @@ Phase 1B verification:
 | Compose logs | Gateway and mock-provider health, readiness, generation, and completion requests returned 200. |
 | Scoped Compose cleanup | Both containers and the network were removed; final Compose listing was empty. |
 
+Phase 1C verification:
+
+| Command or check | Observed result |
+| --- | --- |
+| `uv run ruff format --check .` | Passed: 25 Python files already formatted. |
+| `uv run ruff check .` | Passed. |
+| `uv run mypy src tests` | Passed: no issues in 19 source files. |
+| `uv run pytest` | Passed: 67 tests and 1 intentional e2e skip. |
+| Real-loopback streaming integration tests | Passed: normal SSE, pre-/mid-stream failures, and downstream-disconnect cleanup. |
+| `uv build` | Built the source distribution and wheel successfully. |
+| `git diff --check` | Passed with no whitespace errors. |
+| Docker engine | Docker Desktop reported engine version 29.9.2. |
+| `docker compose -f deploy/compose.yaml config --quiet` | Passed. |
+| Compose image build and startup | Passed; both services became healthy from the locked, non-root image. |
+| Compose real-socket e2e | Passed: buffered requests and a validated SSE stream reached the mock provider over Compose DNS. |
+| Container runtime users | Both services ran as `uid=10001(switchboard)`. |
+| Scoped Compose cleanup | Both containers and the network were removed; final Compose listing was empty. |
+
 Phase 0D clean-start verification:
 
 | Command or check | Observed result |
@@ -196,6 +223,13 @@ Phase 0D clean-start verification:
 - Accept only bounded log-safe request IDs and replace unsafe input instead of reflecting it.
 - Do not catch `BaseException` or cancellation exceptions in provider translation.
 - Do not retry or fall back in Phase 1B: one gateway request makes at most one provider request.
+- Prefetch and validate exactly one SSE event before committing the public streaming response, so
+  failures before output retain a truthful JSON status without buffering the whole completion.
+- Treat `[DONE]` as the successful terminal marker; EOF or provider failure without it is partial
+  and unknown, never an implicit success.
+- Let ASGI task cancellation unwind the async generator and close upstream ownership in `finally`;
+  do not poll the downstream socket from application code.
+- Never retry, fall back, or splice providers after streamed output begins.
 
 - Support Python 3.12+ and verify the minimum supported line with uv-managed CPython 3.12.9. The machine also has system Python 3.14.6, but that interpreter was not used for the recorded suite.
 - Use `uv` because it is installed locally and provides reproducible dependency locking and command execution.
@@ -220,12 +254,13 @@ Phase 0D clean-start verification:
 ## Known limitations and blockers
 
 - `POST /generate` is a project test contract, not an OpenAI-compatible endpoint.
-- `stream: true`, SSE, partial-stream errors, and disconnect cleanup are intentionally deferred.
+- Streaming usage is omitted because the current mock stream does not provide trustworthy usage;
+  the gateway does not estimate it.
 - There are no retries, fallback providers, authentication, or paid-provider integrations.
 - No deployment target exists, so CD remains intentionally absent.
 - The Phase 1 branch is not pushed and has no PR or hosted CI.
 
 ## Next subphase
 
-Phase 1B is complete. Stop until the owner says `continue`; Phase 1C will add SSE streaming,
-cancellation/disconnect behavior, and streaming resource-lifecycle tests.
+Phase 1C is complete locally. Stop until the owner says `continue`; the next Phase 1 subphase must
+be selected from the owner-supplied build contract before implementation.
