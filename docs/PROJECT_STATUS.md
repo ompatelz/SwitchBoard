@@ -4,9 +4,8 @@
 
 - **Phase:** 1 — Real working gateway MVP
 - **Subphase:** 1B — Non-streaming gateway and provider adapter
-- **State:** Implementation and local verification complete; Docker Compose acceptance is blocked
-  by a Docker Desktop engine startup failure; not pushed and no Phase 1 PR yet
-- **Updated:** 2026-10-27 (Asia/Calcutta)
+- **State:** Complete locally, including Docker Compose acceptance; not pushed and no Phase 1 PR yet
+- **Updated:** 2026-10-28 (Asia/Calcutta)
 
 ## Completed behavior
 
@@ -142,8 +141,13 @@ Phase 1B verification:
 | Real-socket `SWITCHBOARD_E2E=1` test | Passed: 1 test; gateway forwarded to mock provider. |
 | Local Uvicorn cleanup check | Ports 18000/18001 and both server process IDs were absent afterward. |
 | `docker compose ... config --quiet` | Passed before the engine-dependent startup step. |
-| Docker Compose startup | Blocked before build: Docker Desktop Linux engine API unavailable. |
-| Docker Desktop UI evidence | Secrets Engine could not rename its local `engine.sock` because the file was inaccessible. |
+| Docker engine | Docker Desktop recovered and reported engine version 29.9.2. |
+| Compose image build | Passed from the committed lockfile; installed 18 runtime packages. |
+| Compose startup and health checks | Gateway and mock provider both became healthy. |
+| Compose real-socket e2e | Passed: 1 test; two gateway completions reached the mock provider over Compose DNS. |
+| Container runtime users | Both services ran as non-root user `switchboard`. |
+| Compose logs | Gateway and mock-provider health, readiness, generation, and completion requests returned 200. |
+| Scoped Compose cleanup | Both containers and the network were removed; final Compose listing was empty. |
 
 Phase 0D clean-start verification:
 
@@ -219,13 +223,9 @@ Phase 0D clean-start verification:
 - `stream: true`, SSE, partial-stream errors, and disconnect cleanup are intentionally deferred.
 - There are no retries, fallback providers, authentication, or paid-provider integrations.
 - No deployment target exists, so CD remains intentionally absent.
-- Docker Compose could not be executed because the installed Docker Desktop failed while starting
-  its Secrets Engine. Resetting Docker or modifying its private socket state was not authorized.
-- The real-socket equivalent passed locally, but it is not represented as a Compose pass.
 - The Phase 1 branch is not pushed and has no PR or hosted CI.
 
 ## Next subphase
 
-Resolve the Docker Desktop engine failure and rerun the Phase 1B Compose smoke test before marking
-the acceptance gate fully passed. Then stop until the owner says `continue`; Phase 1C will add SSE
-streaming, cancellation/disconnect behavior, and streaming resource-lifecycle tests.
+Phase 1B is complete. Stop until the owner says `continue`; Phase 1C will add SSE streaming,
+cancellation/disconnect behavior, and streaming resource-lifecycle tests.
