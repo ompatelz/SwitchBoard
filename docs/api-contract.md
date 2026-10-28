@@ -1,6 +1,6 @@
 # Chat Completions API contract
 
-## Phase 1C status
+## Phase 1 MVP status
 
 The public gateway and deterministic mock provider both serve the supported contract at
 `POST /v1/chat/completions`. The gateway validates the request, assigns a request ID, forwards
@@ -112,6 +112,20 @@ digits, `.`, `_`, and `-`, starting with a letter or digit. Missing or unsafe va
 with an opaque generated ID. The chosen ID is forwarded to the provider, returned in the response
 header, and included in gateway error details. It contains no user, host, or process information.
 
+## OpenAI Python SDK compatibility
+
+The Phase 1 acceptance gate uses the standard OpenAI Python SDK 3.40.0 against
+`http://127.0.0.1:8000/v1`. Both `client.chat.completions.create(...)` and the same call with
+`stream=True` deserialize into the SDK's typed completion and chunk objects. The runnable example
+is [`../examples/openai_sdk_chat.py`](../examples/openai_sdk_chat.py).
+
+The SDK requires a non-empty API key to construct its client, so the local example supplies the
+harmless value `switchboard-local-placeholder`. Switchboard does not authenticate that value in
+Phase 1; tenant authentication is explicitly deferred. The example sets `max_retries=0` because
+the SDK retries selected failures by default, while the Phase 1 baseline intentionally performs no
+automatic retry or fallback. Its five-second client timeout is separate from the gateway's bounded
+upstream connect, read, write, and pool timeouts.
+
 ## Validation and failure semantics
 
 Malformed JSON and structurally invalid requests are distinct. Empty message arrays, invalid
@@ -161,6 +175,8 @@ provider-error translation, so task cancellation can propagate to the HTTP opera
 - Only text content and the three documented roles are supported.
 - Exactly one assistant choice is returned in buffered and streaming modes.
 - Streaming supports the documented one-line `data:` subset; extension event types are rejected.
+- SDK compatibility is limited to the fields and roles documented here; the SDK exposing a
+  parameter does not mean Switchboard accepts it.
 - Temperature, token limits, tools, structured outputs, log probabilities, multiple choices,
   multimodal inputs, and provider-specific options are unsupported.
 - The deterministic mock does not run an LLM and makes no quality or tokenizer-accuracy claim.

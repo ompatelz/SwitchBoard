@@ -2,18 +2,18 @@
 
 ## Status and scope
 
-This document describes the merged Phase 0 foundation plus the Phase 1C streaming gateway. The
+This document describes the merged Phase 0 foundation plus the accepted Phase 1 gateway MVP. The
 broader product direction remains in [`BUILD_CONTRACT.md`](BUILD_CONTRACT.md); it is not an
 assertion that those systems already exist.
 
-## Current architecture: Phase 1C
+## Current architecture: Phase 1 gateway MVP
 
 The current system is an installable Python distribution containing two independent FastAPI/ASGI applications connected by one minimal readiness request:
 
 ```text
 client -- GET /healthz --> gateway application
 client -- GET /readyz --> gateway -- shared AsyncClient --> mock GET /healthz
-client -- POST /v1/chat/completions --> gateway validation --> provider adapter
+OpenAI SDK or HTTP client -- POST /v1/chat/completions --> gateway validation --> provider adapter
   --> shared AsyncClient --> mock POST /v1/chat/completions --> validated response
 client -- stream:true --> gateway preflight first SSE event --> async forwarding --> [DONE]
 
@@ -107,6 +107,17 @@ before the public response starts. A failure there remains a normal JSON error. 
 HTTP status is committed: a later provider failure closes the partial response without `[DONE]`,
 usage, retry, fallback, or cross-provider splicing. Missing `[DONE]` is therefore an explicit signal
 that completion is unknown.
+
+## SDK compatibility boundary
+
+The standard OpenAI Python SDK is an external client of the public HTTP contract; it is not used
+inside the gateway or provider adapter. The verified client points `base_url` at Switchboard's
+local `/v1` prefix, supplies a placeholder key because the SDK requires one, disables SDK retries,
+and exercises buffered and streaming Chat Completions. This proves the declared wire subset can be
+consumed as typed SDK objects without coupling Switchboard's implementation to SDK internals.
+
+Authentication is not implied by the placeholder key. Phase 1 accepts the SDK's Authorization
+header but has no tenant identity or authorization policy. Those controls remain Phase 2 work.
 
 ## Deferred architecture
 

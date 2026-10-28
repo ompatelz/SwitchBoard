@@ -26,6 +26,7 @@ dependencies = [
 dev = [
   "httpx2>=2,<3",
   "mypy>=1.15,<2",
+  "openai>=3.40,<4",
   "pytest>=8.3,<10",
   "ruff>=0.11,<1",
 ]
@@ -42,7 +43,7 @@ testpaths = ["tests"]
 [tool.ruff]
 target-version = "py312"
 line-length = 100
-src = ["src", "tests"]
+src = ["src", "tests", "examples"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
@@ -55,7 +56,7 @@ line-ending = "auto"
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["src", "tests"]
+files = ["src", "tests", "examples"]
 pretty = true
 show_error_codes = true
 warn_unreachable = true

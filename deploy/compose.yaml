@@ -1,7 +1,7 @@
 name: switchboard
 
 x-switchboard-service: &switchboard-service
-  image: switchboard:phase-0
+  image: switchboard:phase-1
   init: true
   restart: "no"
 

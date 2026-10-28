@@ -3,8 +3,8 @@
 ## Current phase
 
 - **Phase:** 1 — Real working gateway MVP
-- **Subphase:** 1C — SSE streaming, cancellation, and cleanup
-- **State:** Complete locally, including real-network and Docker Compose acceptance; not pushed
+- **Subphase:** 1D — SDK compatibility and MVP acceptance gate
+- **State:** Local acceptance complete; final commit, push, PR, and hosted checks pending
 - **Updated:** 2026-10-28 (Asia/Calcutta)
 
 ## Completed behavior
@@ -42,6 +42,12 @@
   splicing; clients can distinguish incomplete output from success.
 - The mock provider has deterministic normal, delayed, slow, pre-first-failure, and
   mid-stream-failure scenarios plus cleanup counters used by real-socket tests.
+- OpenAI Python SDK 3.40.0 is locked as a development-only acceptance dependency; the standard
+  client deserializes buffered completions and iterates typed streaming chunks through a custom
+  local `/v1` base URL.
+- `examples/openai_sdk_chat.py` demonstrates buffered and streaming SDK calls with a harmless
+  placeholder key, a five-second client timeout, and SDK retries disabled.
+- SDK use does not imply authentication: Phase 1 accepts the header but has no tenant identity.
 
 - Phase 0 development was based on synchronized `main` and isolated on
   `codex/phase-0-foundation` before merge.
@@ -158,6 +164,26 @@ Phase 1B verification:
 | Compose logs | Gateway and mock-provider health, readiness, generation, and completion requests returned 200. |
 | Scoped Compose cleanup | Both containers and the network were removed; final Compose listing was empty. |
 
+Phase 1D verification:
+
+| Command or check | Observed result |
+| --- | --- |
+| Clean `uv sync --locked --all-groups` in a new isolated environment | Installed 35 locked packages under CPython 3.12.9. |
+| Installed-package import check | Printed `openai=3.40.0 switchboard=0.1.0` without custom `PYTHONPATH`. |
+| `uv run ruff format --check .` | Passed: 27 Python files already formatted. |
+| `uv run ruff check .` | Passed. |
+| `uv run mypy src tests examples` | Passed: no issues in 21 source files. |
+| `uv run pytest` | Passed: 67 tests and 2 intentional stopped-service e2e skips. |
+| Real-loopback streaming integration tests | Passed: completion, failure boundaries, disconnect cancellation, and cleanup. |
+| `uv build` | Built the source distribution and wheel successfully. |
+| Compose build/startup | Built `switchboard:phase-1`; gateway and mock provider became healthy. |
+| Compose e2e suite | Passed: 2 tests covering raw HTTP and OpenAI SDK buffered/streaming calls. |
+| SDK example | Buffered and streaming calls returned identical deterministic content. |
+| Container runtime users | Both services ran as `uid=10001(switchboard)`. |
+| Compose logs and cleanup | No application error appeared; both containers and the scoped network were removed. |
+| Tracked-artifact scan | No environment, cache, build output, bytecode, or log artifact is tracked. |
+| High-confidence secret scan | No private-key block or common live credential pattern was found. |
+
 Phase 1C verification:
 
 | Command or check | Observed result |
@@ -230,6 +256,12 @@ Phase 0D clean-start verification:
 - Let ASGI task cancellation unwind the async generator and close upstream ownership in `finally`;
   do not poll the downstream socket from application code.
 - Never retry, fall back, or splice providers after streamed output begins.
+- Keep the OpenAI SDK development-only: it proves the public wire contract but is not part of the
+  gateway's runtime implementation.
+- Use a placeholder SDK key only because the client constructor requires a non-empty value; do
+  not describe it as authentication.
+- Disable SDK retries in the example and acceptance test so one observed call represents one
+  client attempt and the Phase 1 no-retry baseline remains explicit.
 
 - Support Python 3.12+ and verify the minimum supported line with uv-managed CPython 3.12.9. The machine also has system Python 3.14.6, but that interpreter was not used for the recorded suite.
 - Use `uv` because it is installed locally and provides reproducible dependency locking and command execution.
@@ -257,10 +289,13 @@ Phase 0D clean-start verification:
 - Streaming usage is omitted because the current mock stream does not provide trustworthy usage;
   the gateway does not estimate it.
 - There are no retries, fallback providers, authentication, or paid-provider integrations.
+- Compatibility covers only the documented Chat Completions subset, not every parameter exposed
+  by the OpenAI SDK.
 - No deployment target exists, so CD remains intentionally absent.
 - The Phase 1 branch is not pushed and has no PR or hosted CI.
 
 ## Next subphase
 
-Phase 1C is complete locally. Stop until the owner says `continue`; the next Phase 1 subphase must
-be selected from the owner-supplied build contract before implementation.
+Phase 1 is locally complete once the final integrity checks and cleanup pass. Push the verified
+branch, open the Phase 1 PR without merging, inspect visible hosted checks, then stop. Phase 2A is
+proposal-only until the owner explicitly starts it.
