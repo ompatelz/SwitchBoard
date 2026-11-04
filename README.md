@@ -122,7 +122,7 @@ Run the complete local quality suite:
 ```powershell
 uv run ruff check .
 uv run ruff format --check .
-uv run mypy src tests examples
+uv run mypy src tests examples scripts
 uv run pytest
 uv build
 ```
