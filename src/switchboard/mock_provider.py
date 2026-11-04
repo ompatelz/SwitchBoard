@@ -10,7 +10,7 @@ from typing import Annotated, Literal, cast
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
-from starlette.responses import StreamingResponse
+from starlette.responses import JSONResponse, StreamingResponse
 
 from switchboard import __version__
 from switchboard.contracts import (
@@ -36,6 +36,7 @@ MockStreamScenario = Literal[
     "fail_after_chunks",
     "slow",
 ]
+MockFailureScenario = Literal["normal", "rate_limit", "server_500", "server_503", "invalid"]
 STREAM_SCENARIOS = {
     "normal",
     "delayed",
@@ -209,6 +210,7 @@ def create_app(
     *,
     stream_scenario: MockStreamScenario | None = None,
     stream_delay_seconds: float | None = None,
+    failure_scenario: MockFailureScenario = "normal",
 ) -> FastAPI:
     """Create an isolated mock-provider application instance."""
     raw_scenario = stream_scenario or os.getenv("SWITCHBOARD_MOCK_STREAM_SCENARIO", "normal")
@@ -223,6 +225,8 @@ def create_app(
     )
     if resolved_delay < 0 or resolved_delay > 10:
         raise ValueError("mock stream delay must be between 0 and 10 seconds")
+    if failure_scenario not in {"normal", "rate_limit", "server_500", "server_503", "invalid"}:
+        raise ValueError("unsupported mock failure scenario")
 
     application = FastAPI(
         title="Switchboard Mock Provider",
@@ -276,8 +280,17 @@ def create_app(
     )
     async def chat_completions(
         request: ChatCompletionRequest,
-    ) -> ChatCompletionResponse | StreamingResponse:
+    ) -> ChatCompletionResponse | StreamingResponse | JSONResponse:
         """Return deterministic non-streaming JSON or fragmented SSE."""
+        if failure_scenario == "rate_limit":
+            return JSONResponse(
+                status_code=429, content={"error": "injected"}, headers={"Retry-After": "1"}
+            )
+        if failure_scenario in {"server_500", "server_503"}:
+            status = 500 if failure_scenario == "server_500" else 503
+            return JSONResponse(status_code=status, content={"error": "injected"})
+        if failure_scenario == "invalid":
+            return JSONResponse(status_code=200, content={"invalid": True})
         if not request.stream:
             return build_mock_chat_completion(request)
         if resolved_scenario == "fail_before_first":

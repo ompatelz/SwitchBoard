@@ -1,7 +1,7 @@
 """Minimal Switchboard gateway application and upstream lifecycle."""
 
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Annotated, Literal, cast
 
 import httpx
@@ -31,6 +31,15 @@ from switchboard.provider import (
     ProviderRejectedRequestError,
     ProviderServerError,
     ProviderTimeoutError,
+)
+from switchboard.reliability import (
+    CircuitBreaker,
+    CircuitOpenError,
+    ProviderCapabilities,
+    ProviderRegistry,
+    RegisteredProvider,
+    ReliableProviders,
+    RetryPolicy,
 )
 from switchboard.request_ids import RequestIdMiddleware
 
@@ -80,6 +89,10 @@ def provider_gateway_error(error: ProviderError) -> GatewayError:
     """Map one expected provider failure without exposing its internal details."""
     if isinstance(error, ProviderTimeoutError):
         return GatewayError(504, "provider_timeout", "The provider timed out.", "provider_error")
+    if isinstance(error, CircuitOpenError):
+        return GatewayError(
+            503, "provider_unavailable", "The provider is unavailable.", "provider_error"
+        )
     if isinstance(error, ProviderConnectionError):
         return GatewayError(
             502,
@@ -151,13 +164,53 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
-        async with httpx.AsyncClient(
-            base_url=str(resolved_settings.mock_provider_url),
-            timeout=resolved_settings.http_timeout(),
-            transport=transport,
-        ) as client:
+        async with AsyncExitStack() as stack:
+            client = await stack.enter_async_context(
+                httpx.AsyncClient(
+                    base_url=str(resolved_settings.mock_provider_url),
+                    timeout=resolved_settings.http_timeout(),
+                    transport=transport,
+                )
+            )
+            providers = {
+                "primary": RegisteredProvider(
+                    HttpxMockProvider(client),
+                    ProviderCapabilities(),
+                    CircuitBreaker(
+                        failure_threshold=resolved_settings.circuit_failure_threshold,
+                        recovery_seconds=resolved_settings.circuit_recovery_seconds,
+                    ),
+                )
+            }
+            secondary_name: str | None = None
+            if resolved_settings.secondary_mock_provider_url is not None:
+                secondary_client = await stack.enter_async_context(
+                    httpx.AsyncClient(
+                        base_url=str(resolved_settings.secondary_mock_provider_url),
+                        timeout=resolved_settings.http_timeout(),
+                        transport=transport,
+                    )
+                )
+                providers["secondary"] = RegisteredProvider(
+                    HttpxMockProvider(secondary_client),
+                    ProviderCapabilities(),
+                    CircuitBreaker(
+                        failure_threshold=resolved_settings.circuit_failure_threshold,
+                        recovery_seconds=resolved_settings.circuit_recovery_seconds,
+                    ),
+                )
+                secondary_name = "secondary"
             application.state.http_client = client
-            application.state.chat_provider = HttpxMockProvider(client)
+            application.state.provider_registry = ProviderRegistry(providers)
+            application.state.chat_provider = ReliableProviders(
+                application.state.provider_registry,
+                primary="primary",
+                secondary=secondary_name,
+                policy=RetryPolicy(
+                    max_attempts=resolved_settings.provider_max_attempts,
+                    deadline_seconds=resolved_settings.provider_deadline_seconds,
+                ),
+            )
             yield
 
     application = FastAPI(

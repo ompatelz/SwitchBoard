@@ -157,8 +157,9 @@ Gateway errors use this non-sensitive envelope:
 | Connect, read, write, or pool timeout | 504 | `provider_timeout` |
 
 Provider URLs, response bodies, credentials, stack traces, and internal exception strings are not
-included. The gateway does not retry or fall back, so one client request causes at most one
-provider completion request in Phase 1C.
+included. In Phase 2A, eligible mock-provider failures may cause bounded attempts and optional
+pre-response fallback. See [`failure-model.md`](failure-model.md). The public response shape is
+unchanged. A started stream is never retried or spliced.
 
 ## Timeouts and resource ownership
 

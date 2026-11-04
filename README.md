@@ -8,9 +8,9 @@ LLM gateways can make routing and caching look simple while hiding difficult cor
 
 The project is a learning-focused, portfolio-grade backend and ML-systems implementation. Claims will be tied to reproducible tests and experiments rather than aspirational benchmark numbers.
 
-## Current scope: Phase 1 gateway MVP
+## Current scope: Phase 2A provider reliability
 
-Phase 0 is merged and verified. This branch adds buffered and streaming Phase 1 gateway paths while
+Phase 0 and Phase 1 are merged. This branch adds bounded mock-provider reliability while
 preserving the runnable two-service foundation:
 
 - an installable `src/switchboard` Python package;
@@ -37,6 +37,9 @@ preserving the runnable two-service foundation:
 - verified compatibility with the standard OpenAI Python SDK for buffered and streaming calls.
 
 The gateway supports buffered and streaming Chat Completions for the documented text-only subset.
+Phase 2A adds a named provider registry, typed retry decisions, a finite deadline, optional
+pre-response fallback to a second mock endpoint, and a process-local circuit breaker. Failure and
+streaming semantics are documented in [`docs/failure-model.md`](docs/failure-model.md).
 
 ## HTTP contracts
 
@@ -64,22 +67,20 @@ The gateway supports buffered and streaming Chat Completions for the documented 
 The exact supported Chat Completions fields, limits, and response shape are documented in
 [`docs/api-contract.md`](docs/api-contract.md).
 
-## Explicit non-goals for Phase 1
+## Explicit non-goals for Phase 2A
 
 Phase 1 does **not** include:
 
 - Redis, PostgreSQL, Qdrant, semantic caching, or model routing;
-- retries, fallback routing, or circuit breakers;
-- tenant authentication or multiple real providers;
+- tenant authentication or real paid providers;
 - a dashboard, Kubernetes, Kafka, or paid-provider integration; or
 - performance, cost-saving, or production-readiness claims.
 
 ## Verified status
 
 The exact checks run for this subphase are recorded in [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md).
-Phase 0's local, container, and hosted checks passed before merge. Phase 1's exact local, SDK, and
-Compose results are recorded in the status document. Hosted Phase 1 checks are reported only after
-the branch is pushed and its pull request is created.
+Phase 0 and Phase 1 acceptance results are recorded in the status document. Phase 2A local checks
+are recorded separately; a clean locked install and Compose run are not claimed for this worktree.
 
 ## Local development
 

@@ -2,11 +2,18 @@
 
 ## Status and scope
 
-This document describes the merged Phase 0 foundation plus the accepted Phase 1 gateway MVP. The
+This document describes the merged Phase 0 foundation, accepted Phase 1 gateway MVP, and Phase 2A provider reliability. The
 broader product direction remains in [`BUILD_CONTRACT.md`](BUILD_CONTRACT.md); it is not an
 assertion that those systems already exist.
 
-## Current architecture: Phase 1 gateway MVP
+## Current architecture: Phase 2A provider reliability
+
+The public route now receives a lifespan-owned `ReliableProviders` object. It selects a named
+adapter from `ProviderRegistry`, consults that adapter's process-local breaker, and makes bounded
+sequential attempts under one deadline. The optional secondary is a second configured mock URL and
+HTTP client. No tenant, Redis, cache, or distributed circuit state exists yet. See
+[`failure-model.md`](failure-model.md) and [ADR 0002](adr/0002-retry-fallback-circuit.md) for exact
+failure transitions, limits, and cancellation rules.
 
 The current system is an installable Python distribution containing two independent FastAPI/ASGI applications connected by one minimal readiness request:
 
@@ -25,9 +32,9 @@ test client -- POST /v1/chat/completions --> strict contract --> deterministic C
 Uvicorn runs each application as a separate process. FastAPI routes requests and serializes responses; strict Pydantic models reject unknown or invalid fields. The mock response is a pure function of a canonical JSON representation of the validated request, so it has no dependency on randomness, time, network calls, or process-local state.
 
 The Chat Completions request and response models live in the shared boundary-contract module.
-The gateway depends on the small `ChatProvider` protocol; its current `HttpxMockProvider` adapter
-borrows the lifespan-managed client. There is no persistent store, cache, router, retry, fallback,
-or evaluation workload.
+The gateway depends on the small `ChatProvider` protocol; `ReliableProviders` composes named
+`HttpxMockProvider` adapters that borrow lifespan-managed clients. There is no persistent store,
+cache, learned router, or evaluation workload.
 
 ```mermaid
 flowchart LR
@@ -57,8 +64,9 @@ gateway: GET /healthz
 gateway: POST /v1/chat/completions
   -> request-ID middleware
   -> strict ChatCompletionRequest validation
-  -> injected ChatProvider protocol
-  -> HttpxMockProvider using shared AsyncClient
+  -> injected ChatProvider protocol backed by ReliableProviders
+  -> registry selection, circuit admission, bounded attempts, optional pre-response fallback
+  -> HttpxMockProvider using its lifespan-managed AsyncClient
   -> validated ChatCompletionResponse, validated SSE stream, or stable preflight error
   -> request ID response header
 
@@ -83,9 +91,10 @@ boundary, not the public gateway.
 
 ## Resource lifecycle
 
-The gateway's lifespan context creates one `httpx.AsyncClient` before accepting requests, stores it
-in application state, gives the provider adapter a borrowed reference, and closes it after the
-lifespan exits. Readiness and completion requests reuse that client and connection pool. Buffered
+The gateway's lifespan context creates the primary `httpx.AsyncClient` and, when configured, a
+secondary client before accepting requests. It stores them through adapters in application state
+and closes both after the lifespan exits. Readiness and primary completion requests reuse the
+primary client and connection pool. Buffered
 provider responses are explicitly closed after validation. A streaming adapter owns its open
 response, prefetched first event, and SSE parser until the gateway generator completes or is
 cancelled. The generator yields only when the downstream server requests another item, naturally

@@ -2,10 +2,35 @@
 
 ## Current phase
 
-- **Phase:** 1 — Real working gateway MVP
-- **Subphase:** 1D — SDK compatibility and MVP acceptance gate
-- **State:** Complete; branch pushed, PR #2 open and intentionally unmerged, hosted checks green
-- **Updated:** 2026-10-28 (Asia/Calcutta)
+- **Phase:** 2 — Backend reliability, tenant isolation, exact caching, and request controls
+- **Subphase:** 2A — Provider reliability and bounded failure handling
+- **State:** Implemented locally on `codex/phase-2-backend-reliability`; no Phase 2 push or PR
+- **Updated:** 2026-11-04 (Asia/Calcutta)
+
+## Phase 2A handoff
+
+- Phase 1 PR #2 was merged into `main` at `0c446b7`; the Phase 1 head is an ancestor of that merge.
+- The Phase 2 branch was created from that merge in an isolated worktree. An unrelated uncommitted
+  edit to `src/switchboard/mock_provider.py` on the original Phase 1 checkout was preserved.
+- Named primary and optional secondary mock adapters are selected through `ProviderRegistry`.
+- Typed retry classification, finite sequential attempts, capped jitter/backoff, valid bounded
+  `Retry-After`, one overall pre-response deadline, and cancellation propagation are implemented.
+- Each provider has a process-local closed/open/half-open breaker with one half-open probe.
+- Fallback happens only before buffered output or the first validated stream event. The Phase 1
+  post-output no-splice rule remains.
+- Mock failure scenarios and deterministic fake-adapter/breaker tests cover provider errors,
+  retries, fallback, deadlines, cancellation, and transitions.
+- `docs/failure-model.md` and ADR 0002 record exact semantics and limits.
+- Local verification: Ruff check passed; format check passed (32 Python files); strict mypy passed
+  (24 source files); pytest reported **91 passed, 2 intentional e2e skips**.
+- The untouched merged Phase 1 baseline was verified in a separate temporary worktree: Ruff check,
+  format check (27 Python files), and mypy (21 source files) passed; pytest reported **67 passed,
+  2 intentional e2e skips**. The temporary baseline worktree was removed afterward.
+- Clean `uv sync --locked --all-groups` could not finish because the restricted environment could
+  not resolve PyPI. Tests used the existing local Python 3.12.9 environment with this worktree's
+  `src` directory on `PYTHONPATH`; this is not a clean-install claim.
+- Next: Phase 2B tenant authentication and exact Redis caching only after the owner says
+  “continue.”
 
 ## Completed behavior
 
@@ -291,13 +316,13 @@ Phase 0D clean-start verification:
 - `POST /generate` is a project test contract, not an OpenAI-compatible endpoint.
 - Streaming usage is omitted because the current mock stream does not provide trustworthy usage;
   the gateway does not estimate it.
-- There are no retries, fallback providers, authentication, or paid-provider integrations.
+- There are bounded mock-provider retries and optional fallback; authentication and paid-provider
+  integrations are absent.
 - Compatibility covers only the documented Chat Completions subset, not every parameter exposed
   by the OpenAI SDK.
 - No deployment target exists, so CD remains intentionally absent.
-- Phase 1 has no deployment target; PR #2 is intentionally unmerged pending owner review.
+- Phase 2A has no deployment target or PR yet.
 
 ## Next subphase
 
-Phase 1 is complete and awaiting owner review in PR #2. Do not merge or start Phase 2 without the
-owner's instruction. Phase 2A remains proposal-only.
+Stop after Phase 2A. Phase 2B begins only when the owner says “continue.”

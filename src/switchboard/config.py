@@ -15,6 +15,11 @@ class GatewaySettings(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     mock_provider_url: AnyHttpUrl = DEFAULT_MOCK_PROVIDER_URL
+    secondary_mock_provider_url: AnyHttpUrl | None = None
+    provider_max_attempts: int = Field(default=2, ge=1, le=5)
+    provider_deadline_seconds: float = Field(default=15.0, gt=0, le=120)
+    circuit_failure_threshold: int = Field(default=3, ge=1, le=100)
+    circuit_recovery_seconds: float = Field(default=10.0, gt=0, le=3600)
     upstream_connect_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     upstream_read_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
     upstream_write_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
@@ -37,6 +42,15 @@ class GatewaySettings(BaseModel):
                 "mock_provider_url": os.getenv(
                     "SWITCHBOARD_MOCK_PROVIDER_URL", str(DEFAULT_MOCK_PROVIDER_URL)
                 ),
+                "secondary_mock_provider_url": os.getenv("SWITCHBOARD_SECONDARY_MOCK_PROVIDER_URL"),
+                "provider_max_attempts": os.getenv("SWITCHBOARD_PROVIDER_MAX_ATTEMPTS", "2"),
+                "provider_deadline_seconds": os.getenv(
+                    "SWITCHBOARD_PROVIDER_DEADLINE_SECONDS", "15"
+                ),
+                "circuit_failure_threshold": os.getenv(
+                    "SWITCHBOARD_CIRCUIT_FAILURE_THRESHOLD", "3"
+                ),
+                "circuit_recovery_seconds": os.getenv("SWITCHBOARD_CIRCUIT_RECOVERY_SECONDS", "10"),
                 "upstream_connect_timeout_seconds": os.getenv(
                     "SWITCHBOARD_UPSTREAM_CONNECT_TIMEOUT_SECONDS", "2.0"
                 ),
