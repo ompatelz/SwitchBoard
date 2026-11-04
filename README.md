@@ -8,7 +8,7 @@ LLM gateways can make routing and caching look simple while hiding difficult cor
 
 The project is a learning-focused, portfolio-grade backend and ML-systems implementation. Claims will be tied to reproducible tests and experiments rather than aspirational benchmark numbers.
 
-## Current scope: Phase 2A provider reliability
+## Current scope: Phase 2B tenant authentication and exact cache
 
 Phase 0 and Phase 1 are merged. This branch adds bounded mock-provider reliability while
 preserving the runnable two-service foundation:
@@ -40,6 +40,8 @@ The gateway supports buffered and streaming Chat Completions for the documented 
 Phase 2A adds a named provider registry, typed retry decisions, a finite deadline, optional
 pre-response fallback to a second mock endpoint, and a process-local circuit breaker. Failure and
 streaming semantics are documented in [`docs/failure-model.md`](docs/failure-model.md).
+Phase 2B requires a configured bearer API key and adds a tenant-scoped exact Redis cache for
+successful buffered calls. Streaming and secondary-provider policies bypass the cache.
 
 ## HTTP contracts
 
@@ -67,20 +69,20 @@ streaming semantics are documented in [`docs/failure-model.md`](docs/failure-mod
 The exact supported Chat Completions fields, limits, and response shape are documented in
 [`docs/api-contract.md`](docs/api-contract.md).
 
-## Explicit non-goals for Phase 2A
+## Explicit non-goals for Phase 2B
 
-Phase 1 does **not** include:
+Phase 2B does **not** include:
 
-- Redis, PostgreSQL, Qdrant, semantic caching, or model routing;
-- tenant authentication or real paid providers;
+- PostgreSQL, Qdrant, semantic caching, or learned model routing;
+- production key administration, rate limits, or real paid providers;
 - a dashboard, Kubernetes, Kafka, or paid-provider integration; or
 - performance, cost-saving, or production-readiness claims.
 
 ## Verified status
 
 The exact checks run for this subphase are recorded in [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md).
-Phase 0 and Phase 1 acceptance results are recorded in the status document. Phase 2A local checks
-are recorded separately; a clean locked install and Compose run are not claimed for this worktree.
+Phase 0, Phase 1, and Phase 2A results are recorded in the status document. Phase 2B verification
+is recorded separately, including checks that could not run on the current machine.
 
 ## Local development
 
@@ -111,6 +113,21 @@ Confirm that the installed package imports normally:
 uv run python -c "import switchboard; print(switchboard.__version__)"
 ```
 
+Generate a development key in your shell. Keep the raw key private; configure only its SHA-256
+digest on the gateway. The same shell variables are used by Compose and the examples:
+
+```powershell
+$keyBytes = [byte[]]::new(32)
+[Security.Cryptography.RandomNumberGenerator]::Fill($keyBytes)
+$env:SWITCHBOARD_API_KEY = [Convert]::ToBase64String($keyBytes).TrimEnd('=').Replace('+','-').Replace('/','_')
+$digest = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($env:SWITCHBOARD_API_KEY))).ToLowerInvariant()
+$env:SWITCHBOARD_TENANT_KEY_HASHES_JSON = @{ dev = $digest } | ConvertTo-Json -Compress
+```
+
+For direct local execution, start Redis at `127.0.0.1:6379` or configure
+`SWITCHBOARD_REDIS_URL`. If Redis is absent, allowed completions still reach the provider and
+`/cachez` reports 503. Never commit the raw key or a real `.env` file.
+
 Run the gateway:
 
 ```powershell
@@ -128,6 +145,7 @@ Exercise both services:
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/healthz
 Invoke-RestMethod http://127.0.0.1:8000/readyz
+Invoke-RestMethod http://127.0.0.1:8000/cachez
 Invoke-RestMethod http://127.0.0.1:8001/healthz
 Invoke-RestMethod -Method Post `
   -Uri http://127.0.0.1:8001/generate `
@@ -135,10 +153,11 @@ Invoke-RestMethod -Method Post `
   -Body '{"prompt":"Explain ASGI","model":"mock-v1","seed":7}'
 Invoke-RestMethod -Method Post `
   -Uri http://127.0.0.1:8000/v1/chat/completions `
-  -Headers @{ "X-Request-ID" = "readme-example-1" } `
+  -Headers @{ "X-Request-ID" = "readme-example-1"; Authorization = "Bearer $env:SWITCHBOARD_API_KEY" } `
   -ContentType application/json `
   -Body '{"model":"mock-v1","messages":[{"role":"user","content":"Explain ASGI"}]}'
 curl.exe --no-buffer http://127.0.0.1:8000/v1/chat/completions `
+  -H "Authorization: Bearer $env:SWITCHBOARD_API_KEY" `
   -H "Content-Type: application/json" `
   -d '{"model":"mock-v1","messages":[{"role":"user","content":"Explain ASGI"}],"stream":true}'
 ```
@@ -158,18 +177,20 @@ uv run python examples/openai_sdk_chat.py
 Its essential client configuration is:
 
 ```python
+import os
+
 from openai import OpenAI
 
 client = OpenAI(
     base_url="http://127.0.0.1:8000/v1",
-    api_key="switchboard-local-placeholder",
+    api_key=os.environ["SWITCHBOARD_API_KEY"],
     max_retries=0,
     timeout=5.0,
 )
 ```
 
-The placeholder satisfies the SDK constructor but is not authentication: Phase 1 has no tenant
-auth. Disabling SDK retries keeps the baseline behavior observable and avoids confusing client-side
+The SDK sends the configured development key as a bearer token. Disabling SDK retries keeps gateway
+attempts observable and avoids confusing client-side
 retries with gateway behavior. The complete example closes the SDK client with a context manager
 and demonstrates both buffered and streaming calls. This follows the official
 [Python client configuration](https://developers.openai.com/api/reference/python) and
@@ -178,7 +199,7 @@ patterns while targeting Switchboard's intentionally smaller contract.
 
 ## Docker Compose
 
-Docker Desktop must be running. Build and wait for both health checks:
+Docker Desktop must be running. Set the key variables above, then build and wait for health checks:
 
 ```powershell
 docker compose -f deploy/compose.yaml up --build --wait --wait-timeout 180
@@ -189,6 +210,9 @@ Run the real end-to-end smoke test against the published ports:
 ```powershell
 $env:SWITCHBOARD_E2E = "1"
 uv run pytest -m e2e tests/e2e
+$env:SWITCHBOARD_REDIS_INTEGRATION_URL = "redis://127.0.0.1:6380/15"
+uv run pytest -m redis tests/integration/test_redis_cache.py
+Remove-Item Env:SWITCHBOARD_REDIS_INTEGRATION_URL
 Remove-Item Env:SWITCHBOARD_E2E
 ```
 
@@ -198,10 +222,12 @@ Stop the stack gracefully:
 docker compose -f deploy/compose.yaml down --timeout 15
 ```
 
-Compose sets `SWITCHBOARD_MOCK_PROVIDER_URL=http://mock-provider:8001`. The hostname is the Compose service name: `localhost` inside the gateway container would incorrectly point back to the gateway container itself.
+Compose sets the mock-provider and Redis service URLs, and requires the configured tenant-key
+digest map. Redis is exposed only on host loopback port 6380 for the opt-in integration test.
+`localhost` inside the gateway container would point back to the gateway container.
 
-`.env.example` documents the provider URL plus connect, read, write, and pool timeouts currently
-read by the gateway. Set them in the shell or through a process/container environment; the
+`.env.example` documents provider, cache, auth, and timeout settings. Set them in the shell or
+through a process/container environment; the
 application does not silently load `.env` files. Never commit `.env` or real credentials.
 
 ## Troubleshooting
@@ -214,8 +240,10 @@ application does not silently load `.env` files. Never commit `.env` or real cre
   are accepted; unsafe values are replaced.
 - **The SDK calls `/v1/v1/chat/completions`:** set `base_url` to exactly the gateway URL plus one
   `/v1` suffix, as shown above.
-- **The SDK rejects an empty API key:** use the documented local placeholder. It grants no access
-  because authentication is deferred, not implemented.
+- **A completion returns 401:** configure the server-side digest map and send its matching raw key
+  as a bearer token. Missing, invalid, and revoked keys intentionally share one error.
+- **`/cachez` is 503:** check Redis and `SWITCHBOARD_REDIS_URL`. The cache fails open; `/readyz`
+  checks the required mock provider separately.
 - **An SDK failure appears more than once:** set `max_retries=0` while diagnosing the Phase 1
   baseline; current SDK defaults may retry selected connection and HTTP failures.
 - **The e2e test is skipped:** this is expected during the ordinary unit/integration suite. Start both services and set `SWITCHBOARD_E2E=1` to opt into real-socket testing.

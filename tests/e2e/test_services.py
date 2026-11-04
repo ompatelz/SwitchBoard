@@ -25,7 +25,8 @@ def test_running_services_are_healthy_and_deterministic() -> None:
         "messages": [{"role": "user", "content": "Phase 1C smoke test"}],
     }
 
-    with httpx.Client(timeout=5.0) as client:
+    api_key = os.environ["SWITCHBOARD_API_KEY"]
+    with httpx.Client(timeout=5.0, headers={"Authorization": f"Bearer {api_key}"}) as client:
         gateway_health = client.get(f"{gateway_url}/healthz")
         gateway_ready = client.get(f"{gateway_url}/readyz")
         mock_health = client.get(f"{mock_url}/healthz")

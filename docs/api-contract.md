@@ -119,12 +119,10 @@ The Phase 1 acceptance gate uses the standard OpenAI Python SDK 3.40.0 against
 `stream=True` deserialize into the SDK's typed completion and chunk objects. The runnable example
 is [`../examples/openai_sdk_chat.py`](../examples/openai_sdk_chat.py).
 
-The SDK requires a non-empty API key to construct its client, so the local example supplies the
-harmless value `switchboard-local-placeholder`. Switchboard does not authenticate that value in
-Phase 1; tenant authentication is explicitly deferred. The example sets `max_retries=0` because
-the SDK retries selected failures by default, while the Phase 1 baseline intentionally performs no
-automatic retry or fallback. Its five-second client timeout is separate from the gateway's bounded
-upstream connect, read, write, and pool timeouts.
+The local example reads `SWITCHBOARD_API_KEY`, whose SHA-256 digest must be configured for a
+development tenant on the gateway. The example sets `max_retries=0` so SDK retries do not obscure
+gateway attempts. Its five-second client timeout is separate from the gateway's bounded upstream
+connect, read, write, and pool timeouts.
 
 ## Validation and failure semantics
 
@@ -147,6 +145,7 @@ Gateway errors use this non-sensitive envelope:
 
 | Condition | HTTP status | Stable code |
 | --- | ---: | --- |
+| Missing, invalid, or revoked bearer API key | 401 | `invalid_api_key` |
 | Malformed JSON | 400 | `invalid_json` |
 | Request validation failure | 422 | `invalid_request` |
 | Provider rate limit | 429 | `provider_rate_limited` |
@@ -160,6 +159,13 @@ Provider URLs, response bodies, credentials, stack traces, and internal exceptio
 included. In Phase 2A, eligible mock-provider failures may cause bounded attempts and optional
 pre-response fallback. See [`failure-model.md`](failure-model.md). The public response shape is
 unchanged. A started stream is never retried or spliced.
+
+Phase 2B requires `Authorization: Bearer <API key>` for completion requests. Missing, invalid, and
+revoked keys all return the same `authentication_error` envelope and `WWW-Authenticate: Bearer`.
+`/healthz`, `/readyz`, and `/cachez` remain unauthenticated operational endpoints. `/cachez`
+returns `{"status":"ok"}` or HTTP 503 with `{"status":"unavailable"}`. Only successful
+non-streaming calls under a single-provider policy use the exact cache; the response body stays
+identical on a hit. Streaming bypasses it.
 
 ## Timeouts and resource ownership
 

@@ -19,7 +19,7 @@ def test_openai_sdk_buffered_and_streaming_completions() -> None:
     gateway_url = os.getenv("SWITCHBOARD_E2E_GATEWAY_URL", "http://127.0.0.1:8000")
     with OpenAI(
         base_url=f"{gateway_url.rstrip('/')}/v1",
-        api_key="switchboard-local-placeholder",
+        api_key=os.environ["SWITCHBOARD_API_KEY"],
         max_retries=0,
         timeout=5.0,
     ) as client:

@@ -3,9 +3,35 @@
 ## Current phase
 
 - **Phase:** 2 — Backend reliability, tenant isolation, exact caching, and request controls
-- **Subphase:** 2A — Provider reliability and bounded failure handling
+- **Subphase:** 2B — Tenant authentication and exact Redis caching
 - **State:** Implemented locally on `codex/phase-2-backend-reliability`; no Phase 2 push or PR
 - **Updated:** 2026-11-04 (Asia/Calcutta)
+
+## Phase 2B handoff
+
+- The gateway now injects a typed `TenantIdentity` from configured, hashed development API keys.
+  Missing, invalid, and revoked keys share a stable 401 response and make no provider/cache call.
+- An empty key map rejects all completion requests. Raw development keys are generated locally and
+  are not stored in Git; a configuration update and restart applies revocation.
+- A lifespan-owned asynchronous Redis client serves an exact cache for successful buffered
+  requests with one configured provider. Streaming and secondary-provider policies bypass it.
+- The key hashes canonical tenant, validated request fields/defaults, provider identity, and schema
+  version. Redis keys do not contain raw prompts. `SET EX` stores a configured TTL.
+- Redis lookup/write outages and corrupt entries fail open to the provider; `/cachez` reports cache
+  health independently of `/readyz`. Shutdown closes the Redis client.
+- Unit and in-process tests cover key determinism, cross-tenant separation, hits, input changes,
+  expiry, corruption, outage, authentication rejection, streaming bypass, and cleanup.
+- `uv sync --locked --all-groups` completed with redis-py 8.1.0 in the worktree environment.
+  `uv lock --check`, Ruff, formatting (39 Python files), strict mypy (30 source files), and
+  `uv build` passed. The full ordinary suite reported **105 passed, 3 intentional opt-in skips**.
+- Compose built the locked image and started the gateway, mock provider, and Redis 7.4; all three
+  health checks passed. The two live end-to-end tests and one real Redis TTL integration test
+  passed. Compose then removed all three containers and its scoped network.
+- The CI Compose job now generates a fresh development key at runtime, then runs the same live
+  end-to-end and Redis integration tests. Hosted CI results are not yet available because Phase 2
+  has not been pushed.
+- Next: Phase 2C atomic rate limits, bounded upstream concurrency, and metrics only after the owner
+  says “continue.”
 
 ## Phase 2A handoff
 
@@ -316,13 +342,14 @@ Phase 0D clean-start verification:
 - `POST /generate` is a project test contract, not an OpenAI-compatible endpoint.
 - Streaming usage is omitted because the current mock stream does not provide trustworthy usage;
   the gateway does not estimate it.
-- There are bounded mock-provider retries and optional fallback; authentication and paid-provider
-  integrations are absent.
+- There are bounded mock-provider retries, optional fallback, and development API-key
+  authentication; paid-provider integrations and production key administration are absent.
+- Concurrent cache misses may duplicate provider work; no singleflight or stampede claim is made.
 - Compatibility covers only the documented Chat Completions subset, not every parameter exposed
   by the OpenAI SDK.
 - No deployment target exists, so CD remains intentionally absent.
-- Phase 2A has no deployment target or PR yet.
+- Phase 2B has no deployment target or PR yet.
 
 ## Next subphase
 
-Stop after Phase 2A. Phase 2B begins only when the owner says “continue.”
+Stop after Phase 2B. Phase 2C begins only when the owner says “continue.”

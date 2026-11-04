@@ -5,8 +5,10 @@ from collections.abc import AsyncIterator, Callable
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
+from fastapi import FastAPI
+from fastapi.testclient import TestClient as _TestClient
 
+from conftest import TEST_API_KEY
 from switchboard.contracts import (
     AssistantMessage,
     ChatCompletionChoice,
@@ -19,6 +21,14 @@ from switchboard.gateway import create_app, get_chat_provider
 from switchboard.mock_provider import create_app as create_mock_provider_app
 from switchboard.provider import ChatProviderStream
 from switchboard.request_ids import REQUEST_ID_HEADER, REQUEST_ID_PATTERN
+
+
+class GatewayTestClient(_TestClient):
+    """Use the configured test tenant for existing gateway behavior checks."""
+
+    def __init__(self, app: FastAPI) -> None:
+        super().__init__(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
+
 
 VALID_REQUEST = {
     "model": "mock-v1",
@@ -51,7 +61,7 @@ def test_valid_request_reaches_provider_and_preserves_request_id() -> None:
         return httpx.Response(200, json=VALID_RESPONSE)
 
     application = create_app(transport=httpx.MockTransport(provider))
-    with TestClient(application) as client:
+    with GatewayTestClient(application) as client:
         response = client.post(
             "/v1/chat/completions",
             json=VALID_REQUEST,
@@ -69,7 +79,7 @@ def test_gateway_round_trip_uses_actual_mock_application() -> None:
     mock_application = create_mock_provider_app()
     gateway_application = create_app(transport=httpx.ASGITransport(app=mock_application))
 
-    with TestClient(gateway_application) as client:
+    with GatewayTestClient(gateway_application) as client:
         response = client.post(
             "/v1/chat/completions",
             json=VALID_REQUEST,
@@ -90,7 +100,7 @@ def test_unsafe_request_id_is_replaced_before_forwarding() -> None:
         forwarded.append(request.headers[REQUEST_ID_HEADER])
         return httpx.Response(200, json=VALID_RESPONSE)
 
-    with TestClient(create_app(transport=httpx.MockTransport(provider))) as client:
+    with GatewayTestClient(create_app(transport=httpx.MockTransport(provider))) as client:
         response = client.post(
             "/v1/chat/completions",
             json=VALID_REQUEST,
@@ -134,7 +144,7 @@ def test_provider_dependency_can_be_replaced_without_networking() -> None:
     application = create_app()
     application.dependency_overrides[get_chat_provider] = lambda: fake
 
-    with TestClient(application) as client:
+    with GatewayTestClient(application) as client:
         response = client.post("/v1/chat/completions", json=VALID_REQUEST)
 
     assert response.status_code == 200
@@ -159,7 +169,7 @@ def test_invalid_client_payload_uses_stable_error_envelope(
     body: str, status_code: int, code: str
 ) -> None:
     """Malformed JSON and contract failures remain distinct and non-sensitive."""
-    with TestClient(create_app()) as client:
+    with GatewayTestClient(create_app()) as client:
         response = client.post(
             "/v1/chat/completions",
             content=body,
@@ -199,7 +209,7 @@ def test_transport_failures_are_bounded_and_translated(
 ) -> None:
     """Connection and every timeout category map to documented gateway errors."""
     application = create_app(transport=httpx.MockTransport(transport_failure(exception_type)))
-    with TestClient(application) as client:
+    with GatewayTestClient(application) as client:
         response = client.post("/v1/chat/completions", json=VALID_REQUEST)
 
     assert response.status_code == status_code
@@ -223,7 +233,7 @@ def test_provider_statuses_remain_distinguishable(
     def provider(_: httpx.Request) -> httpx.Response:
         return httpx.Response(provider_status, text="secret provider details")
 
-    with TestClient(create_app(transport=httpx.MockTransport(provider))) as client:
+    with GatewayTestClient(create_app(transport=httpx.MockTransport(provider))) as client:
         response = client.post("/v1/chat/completions", json=VALID_REQUEST)
 
     assert response.status_code == gateway_status
@@ -245,7 +255,7 @@ def test_invalid_provider_response_fails_safely(provider_response: httpx.Respons
     def provider(_: httpx.Request) -> httpx.Response:
         return provider_response
 
-    with TestClient(create_app(transport=httpx.MockTransport(provider))) as client:
+    with GatewayTestClient(create_app(transport=httpx.MockTransport(provider))) as client:
         response = client.post("/v1/chat/completions", json=VALID_REQUEST)
 
     assert response.status_code == 502
@@ -274,7 +284,7 @@ def test_provider_response_body_is_closed_after_validation() -> None:
     def provider(_: httpx.Request) -> httpx.Response:
         return httpx.Response(200, stream=stream)
 
-    with TestClient(create_app(transport=httpx.MockTransport(provider))) as client:
+    with GatewayTestClient(create_app(transport=httpx.MockTransport(provider))) as client:
         response = client.post("/v1/chat/completions", json=VALID_REQUEST)
 
     assert response.status_code == 200

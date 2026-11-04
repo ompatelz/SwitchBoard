@@ -2,11 +2,21 @@
 
 ## Status and scope
 
-This document describes the merged Phase 0 foundation, accepted Phase 1 gateway MVP, and Phase 2A provider reliability. The
+This document describes the merged Phase 0 foundation, accepted Phase 1 gateway MVP, and current
+Phase 2A–2B work. The
 broader product direction remains in [`BUILD_CONTRACT.md`](BUILD_CONTRACT.md); it is not an
 assertion that those systems already exist.
 
-## Current architecture: Phase 2A provider reliability
+## Current architecture: Phase 2B tenant auth and exact cache
+
+The completion route first receives a typed `TenantIdentity` through FastAPI dependency injection.
+An `ApiKeyAuthenticator` compares the incoming bearer key's SHA-256 digest with configured tenant
+digests and rejects unknown or revoked keys. For an eligible buffered request, `ExactCache` hashes
+canonical tenant, provider-policy, schema, and request data into a Redis key. A valid hit returns
+without upstream work. Misses, corrupt entries, and Redis failures proceed to the provider. A
+successful provider result is stored with `SET EX`; write failure does not change the response.
+Streaming and configured-secondary policies bypass the cache. See
+[`ADR 0003`](adr/0003-tenant-auth-exact-cache.md).
 
 The public route now receives a lifespan-owned `ReliableProviders` object. It selects a named
 adapter from `ProviderRegistry`, consults that adapter's process-local breaker, and makes bounded
@@ -64,10 +74,13 @@ gateway: GET /healthz
 gateway: POST /v1/chat/completions
   -> request-ID middleware
   -> strict ChatCompletionRequest validation
+  -> bearer-key authentication and TenantIdentity injection
+  -> eligible exact-cache lookup or bypass
   -> injected ChatProvider protocol backed by ReliableProviders
   -> registry selection, circuit admission, bounded attempts, optional pre-response fallback
   -> HttpxMockProvider using its lifespan-managed AsyncClient
   -> validated ChatCompletionResponse, validated SSE stream, or stable preflight error
+  -> successful eligible buffered response written to Redis with TTL
   -> request ID response header
 
 mock: POST /generate
@@ -93,7 +106,8 @@ boundary, not the public gateway.
 
 The gateway's lifespan context creates the primary `httpx.AsyncClient` and, when configured, a
 secondary client before accepting requests. It stores them through adapters in application state
-and closes both after the lifespan exits. Readiness and primary completion requests reuse the
+and closes both after the lifespan exits. It also owns one asynchronous Redis client and pool,
+closed at shutdown. Readiness and primary completion requests reuse the
 primary client and connection pool. Buffered
 provider responses are explicitly closed after validation. A streaming adapter owns its open
 response, prefetched first event, and SSE parser until the gateway generator completes or is
@@ -107,7 +121,11 @@ Creating a client per request was rejected because it would discard connection p
 
 ## Container topology
 
-Both services use one locked, non-root image, built once from the mock-provider service definition and reused by the gateway. Compose starts the mock provider first, waits for its `/healthz`, then starts the gateway with `SWITCHBOARD_MOCK_PROVIDER_URL=http://mock-provider:8001`. Gateway health checks call `/readyz`, proving service discovery and upstream reachability rather than process liveness alone. Only ports 8000 and 8001 are published to host loopback.
+The gateway and mock provider use one locked, non-root image. Compose also runs Redis 7.4 with a
+health check and ephemeral cache data. It requires a development tenant digest map in the local
+environment, then starts the gateway with service DNS URLs for the mock and Redis. Gateway
+`/readyz` checks the required provider; `/cachez` checks optional Redis separately. Ports 8000,
+8001, and Redis test port 6380 are bound to host loopback only.
 
 ## Streaming failure boundary
 
@@ -121,16 +139,15 @@ that completion is unknown.
 
 The standard OpenAI Python SDK is an external client of the public HTTP contract; it is not used
 inside the gateway or provider adapter. The verified client points `base_url` at Switchboard's
-local `/v1` prefix, supplies a placeholder key because the SDK requires one, disables SDK retries,
+local `/v1` prefix, supplies the configured development tenant key, disables SDK retries,
 and exercises buffered and streaming Chat Completions. This proves the declared wire subset can be
 consumed as typed SDK objects without coupling Switchboard's implementation to SDK internals.
 
-Authentication is not implied by the placeholder key. Phase 1 accepts the SDK's Authorization
-header but has no tenant identity or authorization policy. Those controls remain Phase 2 work.
+The SDK sends that key as a bearer token. The gateway authenticates it into a tenant identity;
+per-tenant authorization policies remain deferred.
 
 ## Deferred architecture
 
-Redis, PostgreSQL, Qdrant, authentication, tenant budgets, semantic caching, policy routing,
-circuit breakers, metrics infrastructure, replay evaluation, and production deployment remain
-deferred. Their appearance in the build contract is roadmap context, not current implementation
-status.
+PostgreSQL, Qdrant, production key administration, tenant budgets, semantic caching, learned policy
+routing, metrics infrastructure, replay evaluation, and production deployment remain deferred.
+Phase 2C will add rate limiting, bounded upstream concurrency, and baseline metrics.

@@ -56,7 +56,28 @@ subsequent streaming reads.
 
 The application lifespan closes the primary and optional secondary HTTP clients. There is no Redis
 in Phase 2A. HTTP status mapping remains non-sensitive and never includes credentials, provider
-URLs, response bodies, or exception strings. No authentication or tenant identity exists yet.
+URLs, response bodies, or exception strings.
+
+## Phase 2B authentication and cache failures
+
+The configured key-hash map is process-local and read at startup. Empty, missing, invalid, and
+revoked keys fail closed with the same 401 envelope before cache or upstream execution. Revocation
+is applied by updating configuration and restarting workers; it is not a live global revocation
+service. No raw key, prompt, response, or private Redis URL is logged by cache code.
+
+The exact cache is a non-critical optimization. Redis connection, timeout, or command failure makes
+lookup a miss and makes write a no-op. Invalid JSON, wrong schema version, and invalid response
+shape are misses. A successful provider result is still returned when Redis write fails. `/cachez`
+can return 503 while `/readyz` remains ready. Redis operations are awaited with a bounded socket
+timeout and an application-lifespan-owned client pool; shutdown calls `aclose()`.
+
+Only successful buffered requests with one configured mock provider enter the cache path. Streaming
+and configured-secondary policies bypass it. Redis `SET EX` stores value and TTL in one command;
+expiry is enforced by Redis, not an in-process timer. The key hashes tenant, provider identity,
+request model, messages, and stream flag, plus a schema version. Changing a supported field or
+provider policy changes the key. Concurrent misses may make duplicate provider calls; this phase
+does not add a request queue, lock, or singleflight lease. Cache failure cannot broaden tenant
+access because authentication remains independent of Redis.
 
 ## Deterministic injection
 

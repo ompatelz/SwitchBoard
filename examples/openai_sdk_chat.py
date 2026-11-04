@@ -5,7 +5,6 @@ import os
 from openai import OpenAI
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1"
-PLACEHOLDER_API_KEY = "switchboard-local-placeholder"
 
 
 def main() -> None:
@@ -13,7 +12,7 @@ def main() -> None:
     base_url = os.getenv("SWITCHBOARD_OPENAI_BASE_URL", DEFAULT_BASE_URL)
     with OpenAI(
         base_url=base_url,
-        api_key=PLACEHOLDER_API_KEY,
+        api_key=os.environ["SWITCHBOARD_API_KEY"],
         max_retries=0,
         timeout=5.0,
     ) as client:

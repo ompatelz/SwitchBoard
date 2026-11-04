@@ -46,6 +46,8 @@ services:
       - "8000"
     environment:
       SWITCHBOARD_MOCK_PROVIDER_URL: http://mock-provider:8001
+      SWITCHBOARD_REDIS_URL: redis://redis:6379/0
+      SWITCHBOARD_TENANT_KEY_HASHES_JSON: ${SWITCHBOARD_TENANT_KEY_HASHES_JSON:?Set tenant key hashes before starting Compose}
       SWITCHBOARD_UPSTREAM_CONNECT_TIMEOUT_SECONDS: "2.0"
       SWITCHBOARD_UPSTREAM_READ_TIMEOUT_SECONDS: "10.0"
       SWITCHBOARD_UPSTREAM_WRITE_TIMEOUT_SECONDS: "2.0"
@@ -63,6 +65,19 @@ services:
         - >-
           import urllib.request;
           urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=2).read()
+      interval: 2s
+      timeout: 2s
+      retries: 20
+      start_period: 5s
+
+  redis:
+    image: redis:7.4-alpine
+    restart: "no"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 2s
       timeout: 2s
       retries: 20

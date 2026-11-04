@@ -1,16 +1,20 @@
 """Minimal Switchboard gateway application and upstream lifecycle."""
 
+import hashlib
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Annotated, Literal, cast
 
 import httpx
+import redis.asyncio as redis
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
+from redis.exceptions import RedisError
 from starlette.responses import JSONResponse, StreamingResponse
 
 from switchboard import __version__
+from switchboard.auth import ApiKeyAuthenticator, TenantIdentity
 from switchboard.config import GatewaySettings
 from switchboard.contracts import (
     ChatCompletionChunk,
@@ -21,6 +25,7 @@ from switchboard.contracts import (
     HealthResponse,
     ReadinessResponse,
 )
+from switchboard.exact_cache import AsyncCacheClient, ExactCache
 from switchboard.provider import (
     ChatProvider,
     ChatProviderStream,
@@ -43,7 +48,7 @@ from switchboard.reliability import (
 )
 from switchboard.request_ids import RequestIdMiddleware
 
-ErrorType = Literal["invalid_request_error", "provider_error"]
+ErrorType = Literal["invalid_request_error", "provider_error", "authentication_error"]
 
 
 class GatewayError(Exception):
@@ -67,6 +72,20 @@ def get_chat_provider(request: Request) -> ChatProvider:
     return cast(ChatProvider, request.app.state.chat_provider)
 
 
+def get_tenant_identity(request: Request) -> TenantIdentity:
+    """Authenticate before provider or cache work and inject typed identity."""
+    authenticator = cast(ApiKeyAuthenticator, request.app.state.authenticator)
+    tenant = authenticator.authenticate(request.headers.get("authorization"))
+    if tenant is None:
+        raise GatewayError(401, "invalid_api_key", "Invalid API key.", "authentication_error")
+    return tenant
+
+
+def get_exact_cache(request: Request) -> ExactCache | None:
+    """Return the eligible process's cache; fallback policies bypass it."""
+    return cast(ExactCache | None, request.app.state.exact_cache)
+
+
 def request_id_from(request: Request) -> str:
     """Read the request ID assigned by the outer ASGI middleware."""
     return cast(str, request.state.request_id)
@@ -82,7 +101,10 @@ def error_response(request: Request, error: GatewayError) -> JSONResponse:
             request_id=request_id_from(request),
         )
     )
-    return JSONResponse(status_code=error.status_code, content=body.model_dump(mode="json"))
+    headers = {"WWW-Authenticate": "Bearer"} if error.status_code == 401 else None
+    return JSONResponse(
+        status_code=error.status_code, content=body.model_dump(mode="json"), headers=headers
+    )
 
 
 def provider_gateway_error(error: ProviderError) -> GatewayError:
@@ -158,9 +180,13 @@ def create_app(
     settings: GatewaySettings | None = None,
     *,
     transport: httpx.AsyncBaseTransport | None = None,
+    redis_client: AsyncCacheClient | None = None,
 ) -> FastAPI:
     """Create an isolated gateway application instance."""
     resolved_settings = settings or GatewaySettings.from_env()
+    provider_policy = hashlib.sha256(
+        f"mock-v1:{resolved_settings.mock_provider_url}".encode()
+    ).hexdigest()
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
@@ -210,6 +236,27 @@ def create_app(
                     max_attempts=resolved_settings.provider_max_attempts,
                     deadline_seconds=resolved_settings.provider_deadline_seconds,
                 ),
+            )
+            application.state.authenticator = ApiKeyAuthenticator(
+                resolved_settings.tenant_key_hashes, resolved_settings.revoked_key_hashes
+            )
+            cache_connection: AsyncCacheClient = redis_client or redis.from_url(
+                str(resolved_settings.redis_url),
+                decode_responses=False,
+                socket_connect_timeout=resolved_settings.redis_timeout_seconds,
+                socket_timeout=resolved_settings.redis_timeout_seconds,
+                max_connections=20,
+            )
+            stack.push_async_callback(cache_connection.aclose)
+            application.state.redis_client = cache_connection
+            application.state.exact_cache = (
+                ExactCache(
+                    cache_connection,
+                    ttl_seconds=resolved_settings.cache_ttl_seconds,
+                    provider_policy=provider_policy,
+                )
+                if secondary_name is None
+                else None
             )
             yield
 
@@ -282,22 +329,44 @@ def create_app(
 
         return ReadinessResponse()
 
+    @application.get("/cachez", summary="Check optional Redis cache health", tags=["operations"])
+    async def cachez(request: Request) -> JSONResponse:
+        cache_connection = cast(AsyncCacheClient, request.app.state.redis_client)
+        try:
+            await cache_connection.ping()
+        except (RedisError, TimeoutError, OSError):
+            return JSONResponse(status_code=503, content={"status": "unavailable"})
+        return JSONResponse(content={"status": "ok"})
+
     @application.post(
         "/v1/chat/completions",
         response_model=ChatCompletionResponse,
-        responses={status: {"model": ErrorResponse} for status in (400, 422, 429, 502, 503, 504)},
+        responses={
+            status: {"model": ErrorResponse} for status in (400, 401, 422, 429, 502, 503, 504)
+        },
         summary="Create one buffered or streaming Chat Completion",
         tags=["chat"],
     )
     async def chat_completions(
         request_body: ChatCompletionRequest,
         request: Request,
+        tenant: Annotated[TenantIdentity, Depends(get_tenant_identity)],
         provider: Annotated[ChatProvider, Depends(get_chat_provider)],
+        cache: Annotated[ExactCache | None, Depends(get_exact_cache)],
     ) -> ChatCompletionResponse | StreamingResponse:
         """Validate, correlate, and forward one buffered or streaming completion."""
         try:
             if not request_body.stream:
-                return await provider.complete(request_body, request_id=request_id_from(request))
+                if cache is not None:
+                    cached = await cache.lookup(tenant, request_body)
+                    if cached is not None:
+                        return cached
+                completion = await provider.complete(
+                    request_body, request_id=request_id_from(request)
+                )
+                if cache is not None:
+                    await cache.store(tenant, request_body, completion)
+                return completion
             provider_stream = await provider.open_stream(
                 request_body,
                 request_id=request_id_from(request),
