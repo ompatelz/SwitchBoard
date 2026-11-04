@@ -51,6 +51,7 @@ async def running_server(application: FastAPI) -> AsyncIterator[str]:
             access_log=False,
         )
     )
+    application.state.test_server = server
     task = asyncio.create_task(server.serve(sockets=[listener]))
     try:
         for _ in range(200):
@@ -196,3 +197,28 @@ async def disconnect_case() -> None:
 async def test_downstream_disconnect_closes_the_upstream_stream() -> None:
     """Early client departure cancels forwarding and releases the HTTP response."""
     await disconnect_case()
+
+
+@pytest.mark.anyio
+async def test_graceful_shutdown_waits_for_inflight_stream_then_cleans_up() -> None:
+    mock = create_mock_provider_app(stream_scenario="slow", stream_delay_seconds=0.5)
+    async with running_server(mock) as mock_url:
+        settings = GatewaySettings.model_validate(
+            {**GatewaySettings.from_env().model_dump(), "mock_provider_url": mock_url}
+        )
+        gateway = create_gateway_app(settings)
+        async with running_server(gateway) as gateway_url:
+            async with httpx.AsyncClient(
+                timeout=5, headers={"Authorization": f"Bearer {TEST_API_KEY}"}
+            ) as client:
+                async with client.stream(
+                    "POST", f"{gateway_url}/v1/chat/completions", json=STREAM_REQUEST
+                ) as response:
+                    assert response.status_code == 200
+                    assert b"data: " in await anext(response.aiter_bytes())
+                    gateway.state.test_server.should_exit = True
+                    await asyncio.sleep(0.05)
+                    assert not gateway.state.http_client.is_closed
+                state = await wait_for_closed_stream(mock_url)
+            assert state.active == 0
+        assert gateway.state.http_client.is_closed

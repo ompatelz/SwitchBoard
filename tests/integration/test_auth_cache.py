@@ -1,9 +1,11 @@
 """Tenant authentication and exact-cache request-path tests."""
 
+import asyncio
 import hashlib
 import json
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 from redis.exceptions import ConnectionError as RedisConnectionError
 
@@ -18,6 +20,11 @@ KEY_A = "tenant-a-test-key-0123456789abcdef0123456789"
 KEY_B = "tenant-b-test-key-0123456789abcdef0123456789"
 REVOKED_KEY = "revoked-test-key-0123456789abcdef0123456789"
 REQUEST = {"model": "mock-v1", "messages": [{"role": "user", "content": "private prompt"}]}
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
 
 
 def digest(key: str) -> str:
@@ -322,3 +329,34 @@ def test_metrics_record_retries_fallback_and_bounded_provider_labels() -> None:
     assert 'switchboard_circuit_state{provider="primary",state="closed"} 1.0' in metrics
     assert 'provider="secondary"' in metrics
     assert "private prompt" not in metrics and KEY_A not in metrics
+
+
+@pytest.mark.anyio
+async def test_concurrent_same_key_misses_can_duplicate_upstream_without_poisoning_cache() -> None:
+    redis = MemoryRedis()
+    both_started = asyncio.Event()
+    calls = 0
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            both_started.set()
+        await asyncio.wait_for(both_started.wait(), timeout=2)
+        body = ChatCompletionRequest.model_validate_json(request.content)
+        return httpx.Response(200, json=build_mock_chat_completion(body).model_dump(mode="json"))
+
+    app = create_app(settings(), transport=httpx.MockTransport(upstream), redis_client=redis)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://gateway") as client,
+    ):
+        first, second = await asyncio.gather(
+            client.post("/v1/chat/completions", json=REQUEST, headers=auth(KEY_A)),
+            client.post("/v1/chat/completions", json=REQUEST, headers=auth(KEY_A)),
+        )
+        cached = await client.post("/v1/chat/completions", json=REQUEST, headers=auth(KEY_A))
+    assert first.status_code == second.status_code == cached.status_code == 200
+    assert first.json() == second.json() == cached.json()
+    assert calls == 2
+    assert redis.get_count == 3
