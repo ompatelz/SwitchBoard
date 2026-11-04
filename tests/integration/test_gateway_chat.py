@@ -223,6 +223,7 @@ def test_transport_failures_are_bounded_and_translated(
         (400, 502, "provider_rejected_request"),
         (429, 429, "provider_rate_limited"),
         (500, 503, "provider_unavailable"),
+        (503, 503, "provider_unavailable"),
     ],
 )
 def test_provider_statuses_remain_distinguishable(

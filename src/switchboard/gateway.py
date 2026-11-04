@@ -1,7 +1,7 @@
 """Minimal Switchboard gateway application and upstream lifecycle."""
 
 import hashlib
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Annotated, Literal, cast
 
@@ -181,7 +181,7 @@ def encode_sse_event(event: ChatCompletionChunk | Literal["[DONE]"]) -> bytes:
 
 async def stream_provider_events(
     provider_stream: ChatProviderStream,
-) -> AsyncIterator[bytes]:
+) -> AsyncGenerator[bytes]:
     """Forward under backpressure and close upstream on completion or cancellation."""
     try:
         try:

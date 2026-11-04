@@ -8,7 +8,7 @@ LLM gateways can make routing and caching look simple while hiding difficult cor
 
 The project is a learning-focused, portfolio-grade backend and ML-systems implementation. Claims will be tied to reproducible tests and experiments rather than aspirational benchmark numbers.
 
-## Current scope: Phase 2C request controls and metrics
+## Current scope: Phase 2 acceptance gate
 
 Phase 0 and Phase 1 are merged. This branch adds bounded mock-provider reliability while
 preserving the runnable two-service foundation:
@@ -43,6 +43,9 @@ streaming semantics are documented in [`docs/failure-model.md`](docs/failure-mod
 Phase 2B requires a configured bearer API key and adds a tenant-scoped exact Redis cache for
 successful buffered calls. Streaming and secondary-provider policies bypass the cache.
 Phase 2C adds atomic tenant request windows, bounded worker upstream capacity, and baseline metrics.
+Phase 2D adds a documented fault matrix and local measurements. See
+[`docs/fault-matrix.md`](docs/fault-matrix.md) and
+[`docs/benchmark-results.md`](docs/benchmark-results.md) for exact evidence and limits.
 
 ## HTTP contracts
 
@@ -86,19 +89,19 @@ Each worker permits at most 32 active upstream calls or streams by default. A fu
 metrics with fixed, non-sensitive labels. See [ADR 0004](docs/adr/0004-rate-concurrency-metrics.md)
 for window, cleanup, and metric semantics. Token quotas and a dashboard remain deferred.
 
-## Explicit non-goals for Phase 2C
+## Explicit non-goals for Phase 2
 
-Phase 2C does **not** include:
+Phase 2 does **not** include:
 
 - PostgreSQL, Qdrant, semantic caching, or learned model routing;
 - production key administration, token quotas, or real paid providers;
 - a dashboard, Kubernetes, Kafka, or paid-provider integration; or
-- performance, cost-saving, or production-readiness claims.
+- real-provider performance, cost-saving, or production-readiness claims.
 
 ## Verified status
 
 The exact checks run for this subphase are recorded in [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md).
-Phase 0, Phase 1, Phase 2A, Phase 2B, and Phase 2C results are recorded separately in the status
+Phase 0, Phase 1, and each Phase 2 subphase are recorded separately in the status
 document.
 
 ## Local development
@@ -248,6 +251,28 @@ digest map. Redis is exposed only on host loopback port 6380 for the opt-in inte
 through a process/container environment; the
 application does not silently load `.env` files. Never commit `.env` or real credentials.
 
+## Phase 2 measurements and fault injection
+
+The checked-in benchmark uses real HTTP against the Compose mock provider, a cached gateway,
+and an optional second gateway whose secondary-provider policy bypasses the cache. The results
+are local mock measurements with the workload, percentiles, error rates, and limitations in
+[`docs/benchmark-results.md`](docs/benchmark-results.md). To reproduce them after generating the
+development key above:
+
+```powershell
+$env:SWITCHBOARD_RATE_LIMIT_REQUESTS = '2000'
+docker compose --profile benchmark -f deploy/compose.yaml up --build --wait --wait-timeout 180
+uv run python scripts/benchmark_phase2.py
+docker compose --profile benchmark -f deploy/compose.yaml stop redis
+uv run python scripts/benchmark_phase2.py --redis-outage --output docs/benchmark-redis-outage.json
+docker compose --profile benchmark -f deploy/compose.yaml down --timeout 15
+```
+
+The stopped-Redis experiment deliberately returns 503 because rate enforcement fails closed.
+Normal Compose without `--profile benchmark` does not start the second gateway. The fault matrix
+in [`docs/fault-matrix.md`](docs/fault-matrix.md) maps each injected failure to an exact test and
+states where the test does not prove a broader production property.
+
 ## Troubleshooting
 
 - **Docker reports a missing `dockerDesktopLinuxEngine` pipe:** Docker's CLI is installed, but the Desktop engine is not ready. Start Docker Desktop, wait for `docker ps` to succeed, then retry Compose.
@@ -281,3 +306,5 @@ application does not silently load `.env` files. Never commit `.env` or real cre
 - [`docs/api-contract.md`](docs/api-contract.md) — exact supported Chat Completions subset
 - [`docs/adr/0001-python-fastapi-chat-completions.md`](docs/adr/0001-python-fastapi-chat-completions.md) — initial architecture decision
 - [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) — verified implementation status and handoff log
+- [`docs/fault-matrix.md`](docs/fault-matrix.md) — Phase 2 failure and cleanup gate
+- [`docs/benchmark-results.md`](docs/benchmark-results.md) — local mock benchmark and reproduction

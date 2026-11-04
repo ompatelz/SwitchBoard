@@ -58,6 +58,12 @@ The application lifespan closes the primary and optional secondary HTTP clients.
 in Phase 2A. HTTP status mapping remains non-sensitive and never includes credentials, provider
 URLs, response bodies, or exception strings.
 
+Phase 2D's [fault matrix](fault-matrix.md) records which of these paths were tested with injected
+errors, real loopback streaming, or real Redis. Normal Uvicorn shutdown drains an active stream
+until its client disconnects and then closes lifespan clients. Forced process termination cannot
+run application cleanup. A slow downstream consumer advances the upstream async iterator only
+when it requests the next event; this does not specify a kernel TCP-buffer threshold.
+
 ## Phase 2B authentication and cache failures
 
 The configured key-hash map is process-local and read at startup. Empty, missing, invalid, and

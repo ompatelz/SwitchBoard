@@ -3,9 +3,35 @@
 ## Current phase
 
 - **Phase:** 2 — Backend reliability, tenant isolation, exact caching, and request controls
-- **Subphase:** 2C — Atomic rate limits, bounded concurrency, and metrics
-- **State:** Implemented locally on `codex/phase-2-backend-reliability`; no Phase 2 push or PR
+- **Subphase:** 2D — Fault-injection gate and local baseline measurements
+- **State:** Local acceptance gate passed on `codex/phase-2-backend-reliability`; review state is tracked on GitHub
 - **Updated:** 2026-11-04 (Asia/Calcutta)
+
+## Phase 2D acceptance evidence
+
+- [Fault matrix](fault-matrix.md) maps all requested scenarios to deterministic injected,
+  real-loopback, or real-Redis tests. Phase 2D added concurrent same-key miss and graceful
+  in-flight-stream shutdown checks, a demand-driven slow-consumer check, and provider 503 coverage.
+- The ordinary full suite after the first Phase 2D test additions reported **113 passed, 4
+  intentional opt-in skips**. Two live end-to-end and two real-Redis tests passed in Compose.
+  The benchmark profile's two gateway workers, mock provider, and Redis all passed health checks.
+- The [benchmark](benchmark-results.md) used three runs of 30 requests per path. Direct mock,
+  uncached gateway, cache miss, warmed hit, and concurrency-four results had zero HTTP errors.
+  Cache counters measured 90 hits, 183 misses/writes including warmups, and 90 bypasses in the
+  separate uncached gateway. Raw timing files are versioned beside the report.
+- With Redis deliberately stopped, one live probe and then 90 measured requests returned the
+  documented 503 `rate_limit_unavailable`. Compose removed all services and its network after
+  each experiment. These are mock-only local results, not real-provider claims.
+- Final local checks: `uv lock --check`, `uv run ruff check .`, `uv run ruff format --check .`
+  (48 Python files), `uv run mypy src tests examples scripts` (36 source files), and `uv build`
+  passed. The full suite reported **115 passed, 4 opt-in skips**. A fresh locked installation in
+  an isolated temporary environment installed 37 packages, imported the installed gateway, and
+  repeated the full suite with **115 passed, 4 opt-in skips**.
+- `git diff --check` passed. Only `.env.example` is tracked among `.env` and `.env.example`;
+  a focused scan of documentation, examples, and measurement data found no key or credential
+  pattern. The original checkout's unrelated `mock_provider.py` edit remains outside this worktree.
+  A fresh fetch showed `origin/main` at `0c446b7`, an ancestor of this Phase 2 branch. The local
+  gate does not imply hosted CI or deployment success.
 
 ## Phase 2C handoff
 
@@ -373,8 +399,8 @@ Phase 0D clean-start verification:
 - Compatibility covers only the documented Chat Completions subset, not every parameter exposed
   by the OpenAI SDK.
 - No deployment target exists, so CD remains intentionally absent.
-- Phase 2C has no deployment target or PR yet.
+- Phase 2 has no deployment target yet.
 
 ## Next subphase
 
-Stop after Phase 2C. Phase 2D begins only when the owner says “continue.”
+Phase 2D is the final acceptance subphase. Stop after its local gate, push, and unmerged PR.

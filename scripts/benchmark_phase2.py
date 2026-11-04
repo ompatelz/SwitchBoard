@@ -38,6 +38,7 @@ async def run_case(
     count: int,
     concurrency: int,
     prefix: str,
+    expected_status: int = 200,
 ) -> dict[str, Any]:
     barrier = asyncio.Semaphore(concurrency)
     timings: list[float] = []
@@ -58,6 +59,8 @@ async def run_case(
             statuses.append(response.status_code)
             if response.status_code == 200:
                 assert response.json()["object"] == "chat.completion"
+            if expected_status == 503 and response.status_code == 503:
+                assert response.json()["error"]["code"] == "rate_limit_unavailable"
 
     if case == "cache_hit":
         warm = await client.post(
@@ -155,6 +158,38 @@ async def benchmark(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+async def benchmark_redis_outage(args: argparse.Namespace) -> dict[str, Any]:
+    key = os.environ.get("SWITCHBOARD_API_KEY")
+    if not key:
+        raise RuntimeError("set SWITCHBOARD_API_KEY to the development key")
+    results: list[dict[str, Any]] = []
+    async with httpx.AsyncClient(timeout=10) as client:
+        for run in range(1, args.runs + 1):
+            result = await run_case(
+                client,
+                url=args.cached_url,
+                key=key,
+                case="redis_unavailable",
+                run=run,
+                count=args.requests,
+                concurrency=1,
+                prefix="synthetic-redis-outage",
+                expected_status=503,
+            )
+            if result["status_counts"] != {"503": args.requests}:
+                raise RuntimeError(f"unexpected outage status counts: {result['status_counts']}")
+            results.append(result)
+    return {
+        "workload": {
+            "runs": args.runs,
+            "requests_per_run": args.requests,
+            "expected": "503 rate_limit_unavailable while Redis is stopped",
+            "percentile_method": "nearest rank",
+        },
+        "results": results,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mock-url", default="http://127.0.0.1:8001")
@@ -163,11 +198,12 @@ def main() -> None:
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--requests", type=int, default=30)
     parser.add_argument("--concurrency", type=int, default=4)
+    parser.add_argument("--redis-outage", action="store_true")
     parser.add_argument("--output", type=Path, default=Path("docs/benchmark-data.json"))
     args = parser.parse_args()
     if min(args.runs, args.requests, args.concurrency) < 1:
         parser.error("runs, requests, and concurrency must be positive")
-    data = asyncio.run(benchmark(args))
+    data = asyncio.run(benchmark_redis_outage(args) if args.redis_outage else benchmark(args))
     args.output.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     print(f"Wrote {args.output}")
 

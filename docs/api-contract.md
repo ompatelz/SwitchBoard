@@ -193,6 +193,11 @@ fallback counts, circuit state, cache outcomes, rate rejections, and upstream ca
 tenant or request identifiers. Bind this endpoint to a trusted network when deploying beyond
 local development.
 
+The Phase 2D [fault matrix](fault-matrix.md) exercises the response boundary for transport errors,
+provider 429/500/503, malformed upstream data, partial streams, Redis loss, and saturation. The
+[benchmark](benchmark-results.md) measures the buffered mock path only. It does not extend the
+accepted Chat Completions fields or claim real-provider latency.
+
 ## Timeouts and resource ownership
 
 Connect, read, write, and pool timeouts are separately configured with positive validated values.

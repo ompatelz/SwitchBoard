@@ -3,7 +3,7 @@
 ## Status and scope
 
 This document describes the merged Phase 0 foundation, accepted Phase 1 gateway MVP, and current
-Phase 2A–2C work. The
+Phase 2A–2D work. The
 broader product direction remains in [`BUILD_CONTRACT.md`](BUILD_CONTRACT.md); it is not an
 assertion that those systems already exist.
 
@@ -43,20 +43,24 @@ Uvicorn runs each application as a separate process. FastAPI routes requests and
 
 The Chat Completions request and response models live in the shared boundary-contract module.
 The gateway depends on the small `ChatProvider` protocol; `ReliableProviders` composes named
-`HttpxMockProvider` adapters that borrow lifespan-managed clients. There is no persistent store,
-cache, learned router, or evaluation workload.
+`HttpxMockProvider` adapters that borrow lifespan-managed clients. Redis holds exact cache entries
+and rate counters. There is no PostgreSQL, semantic cache, learned router, or representative
+evaluation workload.
 
 ```mermaid
 flowchart LR
-    C[Local client or smoke test] -->|GET /healthz| G[Gateway FastAPI app]
-    C -->|GET /readyz| G
-    C -->|POST /generate| M[Mock-provider FastAPI app]
-    C -->|POST /v1/chat/completions| G
-    G -->|buffered JSON or SSE through ChatProvider| M
-    G -->|shared HTTPX client: GET /healthz| M
-    L[Gateway lifespan] -->|create at startup| H[AsyncClient connection pool]
-    H --> G
-    L -->|close at shutdown| H
+    C[Client] -->|POST completion| G[Gateway]
+    G --> A[Authenticate tenant]
+    A --> R[Redis atomic rate decision]
+    R --> K[Exact cache if eligible]
+    K --> P[Local capacity and circuit]
+    P --> H[Shared HTTPX pool]
+    H --> M[Mock provider]
+    L[Gateway lifespan] --> H
+    L --> R
+    L --> K
+    L --> P
+    G --> T[Local metrics registry]
 ```
 
 ## Application factories
@@ -170,7 +174,14 @@ capacity, and provider-side 429 behavior. The first controls tenant request volu
 the second protects a worker's active upstream work; the pool controls its sockets; a provider 429
 is an upstream response that follows the bounded retry policy.
 
+Phase 2D runs a second, opt-in benchmark gateway with a configured secondary mock endpoint that
+points to the same mock service. That policy bypasses exact caching, yielding a buffered uncached
+comparison path. It is a measurement fixture, not a new production routing mode. The fault matrix
+uses in-process injection for typed failures, loopback Uvicorn for streaming/shutdown, and real
+Redis for atomic rate and TTL behavior. See [fault matrix](fault-matrix.md) and
+[benchmark results](benchmark-results.md).
+
 ## Deferred architecture
 
 PostgreSQL, Qdrant, production key administration, tenant budgets, semantic caching, learned policy
-routing, metrics aggregation/dashboard, replay evaluation, and production deployment remain deferred.
+routing, metrics aggregation/dashboard, representative replay evaluation, and production deployment remain deferred.
