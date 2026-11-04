@@ -1,4 +1,4 @@
-# Phase 2A failure model
+# Phase 2 failure model
 
 The gateway currently speaks to deterministic mock providers only. A request is validated before
 provider execution. The configured primary is tried first; an optional secondary mock can be used
@@ -78,6 +78,43 @@ request model, messages, and stream flag, plus a schema version. Changing a supp
 provider policy changes the key. Concurrent misses may make duplicate provider calls; this phase
 does not add a request queue, lock, or singleflight lease. Cache failure cannot broaden tenant
 access because authentication remains independent of Redis.
+
+## Phase 2C request controls and metrics
+
+After authentication, each completion consumes one tenant request decision in Redis, including an
+exact-cache hit. The fixed window begins with that tenant's first request and lasts the configured
+number of seconds (defaults: 120 requests and 60 seconds). One Redis Lua invocation performs
+`INCR`, first-use `EXPIRE`, and `TTL` atomically. All gateway workers sharing Redis therefore see
+one counter per hashed tenant ID. A request over the limit receives 429, stable
+`rate_limit_exceeded`, the current remaining count of zero, seconds to window expiry, and
+`Retry-After`. A permitted request receives the same three `X-RateLimit-*` headers. A failed or
+untrustworthy Redis decision fails closed with 503 `rate_limit_unavailable`; no cache lookup or
+provider call occurs. Cache reads and writes still fail open once a rate decision succeeds. The
+rate counter can be consumed by a request whose later cache or provider step fails; it is never
+refunded. Fixed windows permit a burst near one window boundary followed by another just after it.
+They are a minimal request policy, not a token or cost budget.
+
+Each upstream attempt acquires a process-local semaphore permit before provider I/O. With no free
+permit it rejects immediately with 503 `upstream_concurrency_exhausted`; it does not leave an
+unbounded queue. The default bound is 32 per gateway worker. A retry acquires a fresh permit after
+releasing the prior one. A streaming call retains its permit until the upstream stream closes,
+including after the last event or downstream cancellation. Buffered completion, error, timeout,
+and cancellation release in `finally`. The HTTPX connection pool has its own independent socket
+limit; a provider's own 429 is a separate upstream policy, classified for bounded retry. A local
+semaphore does not impose a global bound across workers or hosts.
+
+`/metrics` exports process-local Prometheus text with fixed provider names and bounded failure
+categories, cache outcomes, and HTTP status classes. It contains no tenant, key, request ID,
+prompt, answer, private URL, or exception label. Counters cover request, provider failure, retry,
+fallback, cache, rate rejection, and capacity rejection events. Histograms cover total HTTP
+request duration (through final streaming body) and upstream attempt duration (through stream
+closure). Gauges cover current upstream permits and a one-hot snapshot of each local circuit
+state. Each worker exports its own metrics; there is no aggregate dashboard in this phase.
+
+Redis unavailable is a partial infrastructure failure: `/healthz` and provider-only `/readyz`
+may still succeed, while completions return 503 because request enforcement cannot be trusted.
+`/cachez` checks Redis health, but does not alone distinguish a healthy cache command from a
+healthy rate script. Investigate Redis connectivity and the gateway's bounded socket timeout.
 
 ## Deterministic injection
 

@@ -118,7 +118,9 @@ class ErrorDetail(StrictContract):
     """Non-sensitive error information returned by the public gateway."""
 
     message: str
-    type: Literal["invalid_request_error", "provider_error", "authentication_error"]
+    type: Literal[
+        "invalid_request_error", "provider_error", "authentication_error", "rate_limit_error"
+    ]
     code: str
     request_id: str
 

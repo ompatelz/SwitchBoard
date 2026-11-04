@@ -20,6 +20,9 @@ class EmptyRedis:
     async def ping(self) -> bool:
         return True
 
+    async def eval(self, script: str, numkeys: int, *keys_and_args: object) -> list[int]:
+        return [1, 60]
+
     async def aclose(self) -> None:
         pass
 

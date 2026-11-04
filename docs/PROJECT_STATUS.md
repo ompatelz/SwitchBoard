@@ -3,9 +3,34 @@
 ## Current phase
 
 - **Phase:** 2 — Backend reliability, tenant isolation, exact caching, and request controls
-- **Subphase:** 2B — Tenant authentication and exact Redis caching
+- **Subphase:** 2C — Atomic rate limits, bounded concurrency, and metrics
 - **State:** Implemented locally on `codex/phase-2-backend-reliability`; no Phase 2 push or PR
 - **Updated:** 2026-11-04 (Asia/Calcutta)
+
+## Phase 2C handoff
+
+- Redis Lua atomically increments one hashed-tenant fixed-window counter and returns TTL. Defaults
+  are 120 requests per 60 seconds. Every authenticated completion consumes one decision, including
+  cache hits. Exhaustion returns stable 429 and request-limit headers; Redis enforcement failure
+  fails closed with stable 503 before cache or provider work.
+- Each gateway worker has a process-local semaphore for at most 32 active upstream attempts or
+  streams by default. Saturation rejects immediately. Buffered, failed, cancelled, and closed
+  streaming calls release permits; retry backoff does not hold capacity.
+- `/metrics` exports process-local Prometheus counters, gauges, and histograms with fixed labels.
+  No tenant, API key, request ID, prompt, answer, URL, or exception text becomes a label.
+- Unit and integration coverage includes tenant isolation, cache-hit charging, Redis outage,
+  retry/fallback metric labels, cancellation cleanup, stream-held permits, and concurrent decisions.
+- Final verification: `uv lock --check`, `uv run ruff check .`,
+  `uv run ruff format --check .` (44 files), `uv run mypy src tests examples` (34 source files),
+  and `uv build` passed. The ordinary suite reported **111 passed, 4 intentional opt-in skips**.
+  Compose built the locked image and all three services were healthy. Two live end-to-end tests
+  and two opt-in real Redis tests passed. Compose removed its containers and network; a subsequent
+  Docker process listing showed no Switchboard containers. `git diff --check` passed, and only
+  `.env.example` is tracked among `.env` and `.env.example`.
+- One restricted Windows rerun could not write uv's temporary interpreter cache, and its in-process
+  HTTP test hung. The final ordinary pytest and package build passed outside that restriction;
+  no application failure was observed in those checks.
+- Next: Phase 2D fault-injection gate and measurements only after the owner says “continue.”
 
 ## Phase 2B handoff
 
@@ -348,8 +373,8 @@ Phase 0D clean-start verification:
 - Compatibility covers only the documented Chat Completions subset, not every parameter exposed
   by the OpenAI SDK.
 - No deployment target exists, so CD remains intentionally absent.
-- Phase 2B has no deployment target or PR yet.
+- Phase 2C has no deployment target or PR yet.
 
 ## Next subphase
 
-Stop after Phase 2B. Phase 2C begins only when the owner says “continue.”
+Stop after Phase 2C. Phase 2D begins only when the owner says “continue.”

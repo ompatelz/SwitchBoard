@@ -9,12 +9,14 @@ import httpx
 import redis.asyncio as redis
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
+from prometheus_client import CONTENT_TYPE_LATEST
 from pydantic import ValidationError
 from redis.exceptions import RedisError
-from starlette.responses import JSONResponse, StreamingResponse
+from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from switchboard import __version__
 from switchboard.auth import ApiKeyAuthenticator, TenantIdentity
+from switchboard.capacity import ConcurrencyLimitError, UpstreamCapacity
 from switchboard.config import GatewaySettings
 from switchboard.contracts import (
     ChatCompletionChunk,
@@ -26,6 +28,7 @@ from switchboard.contracts import (
     ReadinessResponse,
 )
 from switchboard.exact_cache import AsyncCacheClient, ExactCache
+from switchboard.metrics import GatewayMetrics, RequestMetricsMiddleware
 from switchboard.provider import (
     ChatProvider,
     ChatProviderStream,
@@ -37,6 +40,7 @@ from switchboard.provider import (
     ProviderServerError,
     ProviderTimeoutError,
 )
+from switchboard.rate_limit import FixedWindowRateLimiter, RateLimitUnavailable
 from switchboard.reliability import (
     CircuitBreaker,
     CircuitOpenError,
@@ -48,18 +52,28 @@ from switchboard.reliability import (
 )
 from switchboard.request_ids import RequestIdMiddleware
 
-ErrorType = Literal["invalid_request_error", "provider_error", "authentication_error"]
+ErrorType = Literal[
+    "invalid_request_error", "provider_error", "authentication_error", "rate_limit_error"
+]
 
 
 class GatewayError(Exception):
     """Expected public error with a stable status and non-sensitive description."""
 
-    def __init__(self, status_code: int, code: str, message: str, error_type: ErrorType) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        code: str,
+        message: str,
+        error_type: ErrorType,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.message = message
         self.error_type = error_type
+        self.headers = headers or {}
 
 
 def get_http_client(request: Request) -> httpx.AsyncClient:
@@ -86,6 +100,10 @@ def get_exact_cache(request: Request) -> ExactCache | None:
     return cast(ExactCache | None, request.app.state.exact_cache)
 
 
+def get_rate_limiter(request: Request) -> FixedWindowRateLimiter:
+    return cast(FixedWindowRateLimiter, request.app.state.rate_limiter)
+
+
 def request_id_from(request: Request) -> str:
     """Read the request ID assigned by the outer ASGI middleware."""
     return cast(str, request.state.request_id)
@@ -101,7 +119,9 @@ def error_response(request: Request, error: GatewayError) -> JSONResponse:
             request_id=request_id_from(request),
         )
     )
-    headers = {"WWW-Authenticate": "Bearer"} if error.status_code == 401 else None
+    headers = dict(error.headers)
+    if error.status_code == 401:
+        headers["WWW-Authenticate"] = "Bearer"
     return JSONResponse(
         status_code=error.status_code, content=body.model_dump(mode="json"), headers=headers
     )
@@ -187,6 +207,7 @@ def create_app(
     provider_policy = hashlib.sha256(
         f"mock-v1:{resolved_settings.mock_provider_url}".encode()
     ).hexdigest()
+    metrics = GatewayMetrics()
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
@@ -236,6 +257,8 @@ def create_app(
                     max_attempts=resolved_settings.provider_max_attempts,
                     deadline_seconds=resolved_settings.provider_deadline_seconds,
                 ),
+                capacity=UpstreamCapacity(resolved_settings.upstream_concurrency_limit, metrics),
+                metrics=metrics,
             )
             application.state.authenticator = ApiKeyAuthenticator(
                 resolved_settings.tenant_key_hashes, resolved_settings.revoked_key_hashes
@@ -249,11 +272,17 @@ def create_app(
             )
             stack.push_async_callback(cache_connection.aclose)
             application.state.redis_client = cache_connection
+            application.state.rate_limiter = FixedWindowRateLimiter(
+                cache_connection,
+                limit=resolved_settings.rate_limit_requests,
+                window_seconds=resolved_settings.rate_limit_window_seconds,
+            )
             application.state.exact_cache = (
                 ExactCache(
                     cache_connection,
                     ttl_seconds=resolved_settings.cache_ttl_seconds,
                     provider_policy=provider_policy,
+                    metrics=metrics,
                 )
                 if secondary_name is None
                 else None
@@ -267,6 +296,7 @@ def create_app(
         lifespan=lifespan,
     )
     application.add_middleware(RequestIdMiddleware)
+    application.add_middleware(RequestMetricsMiddleware, metrics=metrics)
 
     @application.exception_handler(GatewayError)
     async def handle_gateway_error(request: Request, exc: GatewayError) -> JSONResponse:
@@ -338,6 +368,18 @@ def create_app(
             return JSONResponse(status_code=503, content={"status": "unavailable"})
         return JSONResponse(content={"status": "ok"})
 
+    @application.get(
+        "/metrics", summary="Export process-local gateway metrics", tags=["operations"]
+    )
+    async def metrics_endpoint(request: Request) -> Response:
+        registry = cast(ProviderRegistry, request.app.state.provider_registry)
+        states = {
+            name: registry.get(name, stream=False).breaker.state.value
+            for name in ("primary", "secondary")
+            if name == "primary" or resolved_settings.secondary_mock_provider_url is not None
+        }
+        return Response(metrics.export(states), media_type=CONTENT_TYPE_LATEST)
+
     @application.post(
         "/v1/chat/completions",
         response_model=ChatCompletionResponse,
@@ -350,29 +392,63 @@ def create_app(
     async def chat_completions(
         request_body: ChatCompletionRequest,
         request: Request,
+        response: Response,
         tenant: Annotated[TenantIdentity, Depends(get_tenant_identity)],
+        limiter: Annotated[FixedWindowRateLimiter, Depends(get_rate_limiter)],
         provider: Annotated[ChatProvider, Depends(get_chat_provider)],
         cache: Annotated[ExactCache | None, Depends(get_exact_cache)],
     ) -> ChatCompletionResponse | StreamingResponse:
         """Validate, correlate, and forward one buffered or streaming completion."""
+        try:
+            decision = await limiter.decide(tenant)
+        except RateLimitUnavailable as exc:
+            raise GatewayError(
+                503, "rate_limit_unavailable", "Request limits are unavailable.", "rate_limit_error"
+            ) from exc
+        rate_headers = {
+            "X-RateLimit-Limit": str(limiter.limit),
+            "X-RateLimit-Remaining": str(decision.remaining),
+            "X-RateLimit-Reset": str(decision.reset_seconds),
+        }
+        if not decision.allowed:
+            metrics.rate_rejections.inc()
+            raise GatewayError(
+                429,
+                "rate_limit_exceeded",
+                "Request rate limit exceeded.",
+                "rate_limit_error",
+                headers={**rate_headers, "Retry-After": str(max(1, decision.reset_seconds))},
+            )
+        for key, value in rate_headers.items():
+            response.headers[key] = value
         try:
             if not request_body.stream:
                 if cache is not None:
                     cached = await cache.lookup(tenant, request_body)
                     if cached is not None:
                         return cached
+                else:
+                    metrics.cache.labels(result="bypass").inc()
                 completion = await provider.complete(
                     request_body, request_id=request_id_from(request)
                 )
                 if cache is not None:
                     await cache.store(tenant, request_body, completion)
                 return completion
+            metrics.cache.labels(result="bypass").inc()
             provider_stream = await provider.open_stream(
                 request_body,
                 request_id=request_id_from(request),
             )
         except ProviderError as exc:
             raise provider_gateway_error(exc) from exc
+        except ConcurrencyLimitError as exc:
+            raise GatewayError(
+                503,
+                "upstream_concurrency_exhausted",
+                "Upstream capacity is full.",
+                "provider_error",
+            ) from exc
 
         return StreamingResponse(
             stream_provider_events(provider_stream),
@@ -381,6 +457,7 @@ def create_app(
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
+                **rate_headers,
             },
         )
 

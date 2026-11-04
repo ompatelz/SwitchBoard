@@ -3,17 +3,17 @@
 ## Status and scope
 
 This document describes the merged Phase 0 foundation, accepted Phase 1 gateway MVP, and current
-Phase 2A–2B work. The
+Phase 2A–2C work. The
 broader product direction remains in [`BUILD_CONTRACT.md`](BUILD_CONTRACT.md); it is not an
 assertion that those systems already exist.
 
-## Current architecture: Phase 2B tenant auth and exact cache
+## Current architecture: Phase 2C request controls over tenant auth and exact cache
 
 The completion route first receives a typed `TenantIdentity` through FastAPI dependency injection.
 An `ApiKeyAuthenticator` compares the incoming bearer key's SHA-256 digest with configured tenant
 digests and rejects unknown or revoked keys. For an eligible buffered request, `ExactCache` hashes
 canonical tenant, provider-policy, schema, and request data into a Redis key. A valid hit returns
-without upstream work. Misses, corrupt entries, and Redis failures proceed to the provider. A
+without upstream work. Misses, corrupt entries, and isolated cache-command failures proceed to the provider after a valid rate decision. A
 successful provider result is stored with `SET EX`; write failure does not change the response.
 Streaming and configured-secondary policies bypass the cache. See
 [`ADR 0003`](adr/0003-tenant-auth-exact-cache.md).
@@ -21,7 +21,7 @@ Streaming and configured-secondary policies bypass the cache. See
 The public route now receives a lifespan-owned `ReliableProviders` object. It selects a named
 adapter from `ProviderRegistry`, consults that adapter's process-local breaker, and makes bounded
 sequential attempts under one deadline. The optional secondary is a second configured mock URL and
-HTTP client. No tenant, Redis, cache, or distributed circuit state exists yet. See
+HTTP client. Circuit state remains process-local. See
 [`failure-model.md`](failure-model.md) and [ADR 0002](adr/0002-retry-fallback-circuit.md) for exact
 failure transitions, limits, and cancellation rules.
 
@@ -75,7 +75,9 @@ gateway: POST /v1/chat/completions
   -> request-ID middleware
   -> strict ChatCompletionRequest validation
   -> bearer-key authentication and TenantIdentity injection
+  -> atomic Redis tenant request decision or 429/503 rejection
   -> eligible exact-cache lookup or bypass
+  -> process-local upstream capacity admission or immediate 503 rejection
   -> injected ChatProvider protocol backed by ReliableProviders
   -> registry selection, circuit admission, bounded attempts, optional pre-response fallback
   -> HttpxMockProvider using its lifespan-managed AsyncClient
@@ -146,8 +148,29 @@ consumed as typed SDK objects without coupling Switchboard's implementation to S
 The SDK sends that key as a bearer token. The gateway authenticates it into a tenant identity;
 per-tenant authorization policies remain deferred.
 
+## Phase 2C request path and state
+
+The completion route authenticates a development key, then awaits one Redis-backed rate decision
+before reading the exact cache. Cache hits count toward the tenant's request rate. On a miss or
+cache bypass, `ReliableProviders` acquires a process-local upstream permit for each attempted
+provider call. A buffered attempt releases it when the call ends; a streaming attempt transfers it
+to `CapacityStream`, which releases it when the stream closes. Retry backoff holds no permit.
+The Redis Lua counter and TTL are shared by all gateway workers using the same Redis database;
+the semaphore, circuit breakers, HTTPX pools, and metric registry belong to one worker process.
+
+The route and cache use awaited redis-py commands and the provider adapter uses awaited HTTPX
+calls. No synchronous Redis request runs on the event loop. A private Prometheus registry on each
+FastAPI application exports `/metrics`; the endpoint skips self-measurement and exposes only fixed
+label sets. Request timing ends after the final ASGI response body, including a streaming body.
+The `rate_limit_unavailable` response is fail-closed; isolated cache command failures remain
+fail-open after enforcement succeeds. See [ADR 0004](adr/0004-rate-concurrency-metrics.md).
+
+The request-rate counter is distinct from the local upstream permit count, HTTPX connection-pool
+capacity, and provider-side 429 behavior. The first controls tenant request volume across workers;
+the second protects a worker's active upstream work; the pool controls its sockets; a provider 429
+is an upstream response that follows the bounded retry policy.
+
 ## Deferred architecture
 
 PostgreSQL, Qdrant, production key administration, tenant budgets, semantic caching, learned policy
-routing, metrics infrastructure, replay evaluation, and production deployment remain deferred.
-Phase 2C will add rate limiting, bounded upstream concurrency, and baseline metrics.
+routing, metrics aggregation/dashboard, replay evaluation, and production deployment remain deferred.

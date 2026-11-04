@@ -49,6 +49,8 @@ class MemoryRedis:
         self.closed = False
         self.get_count = 0
         self.set_count = 0
+        self.rate_fail = False
+        self.windows: dict[str, tuple[int, float]] = {}
 
     async def get(self, name: str) -> bytes | None:
         self.get_count += 1
@@ -68,6 +70,18 @@ class MemoryRedis:
         if self.fail:
             raise RedisConnectionError("private redis URL")
         return True
+
+    async def eval(self, script: str, numkeys: int, *keys_and_args: object) -> list[int]:
+        if self.rate_fail:
+            raise RedisConnectionError("private redis URL")
+        key = str(keys_and_args[0])
+        duration = int(str(keys_and_args[1]))
+        count, expiry = self.windows.get(key, (0, self.now + duration))
+        if self.now >= expiry:
+            count, expiry = 0, self.now + duration
+        count += 1
+        self.windows[key] = (count, expiry)
+        return [count, int(expiry - self.now)]
 
     async def aclose(self) -> None:
         self.closed = True
@@ -237,3 +251,74 @@ def test_exact_key_is_deterministic_and_hides_prompt() -> None:
     )
     assert "private prompt" not in first
     assert json.dumps(REQUEST) not in first
+
+
+def test_rate_limit_counts_cache_hits_and_isolates_tenants() -> None:
+    redis = MemoryRedis()
+    upstream = MockUpstream()
+    with TestClient(
+        create_app(
+            settings(rate_limit_requests=2),
+            transport=httpx.MockTransport(upstream),
+            redis_client=redis,
+        )
+    ) as client:
+        first = client.post("/v1/chat/completions", json=REQUEST, headers=auth(KEY_A))
+        hit = client.post("/v1/chat/completions", json=REQUEST, headers=auth(KEY_A))
+        rejected = client.post("/v1/chat/completions", json=REQUEST, headers=auth(KEY_A))
+        other = client.post("/v1/chat/completions", json=REQUEST, headers=auth(KEY_B))
+        metrics = client.get("/metrics").text
+    assert [item.status_code for item in (first, hit, rejected, other)] == [200, 200, 429, 200]
+    assert first.headers["x-ratelimit-remaining"] == "1"
+    assert hit.headers["x-ratelimit-remaining"] == "0"
+    assert rejected.headers["retry-after"] == "60"
+    assert rejected.json()["error"]["code"] == "rate_limit_exceeded"
+    assert upstream.calls == 2
+    assert "switchboard_rate_limit_rejections_total 1.0" in metrics
+    assert 'switchboard_cache_operations_total{result="hit"} 1.0' in metrics
+    assert KEY_A not in metrics and "private prompt" not in metrics
+
+
+def test_rate_enforcement_outage_fails_closed_before_cache_or_provider() -> None:
+    redis = MemoryRedis()
+    redis.rate_fail = True
+    upstream = MockUpstream()
+    with TestClient(
+        create_app(settings(), transport=httpx.MockTransport(upstream), redis_client=redis)
+    ) as client:
+        response = client.post("/v1/chat/completions", json=REQUEST, headers=auth(KEY_A))
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "rate_limit_unavailable"
+    assert upstream.calls == redis.get_count == 0
+
+
+def test_metrics_record_retries_fallback_and_bounded_provider_labels() -> None:
+    redis = MemoryRedis()
+    calls: list[str] = []
+
+    def provider(upstream: httpx.Request) -> httpx.Response:
+        calls.append(upstream.url.host)
+        if upstream.url.host == "127.0.0.1":
+            return httpx.Response(503)
+        request = ChatCompletionRequest.model_validate_json(upstream.content)
+        return httpx.Response(200, json=build_mock_chat_completion(request).model_dump(mode="json"))
+
+    with TestClient(
+        create_app(
+            settings(secondary_mock_provider_url="http://secondary:8002"),
+            transport=httpx.MockTransport(provider),
+            redis_client=redis,
+        )
+    ) as client:
+        response = client.post("/v1/chat/completions", json=REQUEST, headers=auth(KEY_A))
+        metrics = client.get("/metrics").text
+    assert response.status_code == 200
+    assert calls == ["127.0.0.1", "127.0.0.1", "secondary"]
+    assert 'switchboard_retries_total{provider="primary"} 1.0' in metrics
+    assert "switchboard_fallbacks_total 1.0" in metrics
+    assert (
+        'switchboard_provider_failures_total{category="server",provider="primary"} 2.0' in metrics
+    )
+    assert 'switchboard_circuit_state{provider="primary",state="closed"} 1.0' in metrics
+    assert 'provider="secondary"' in metrics
+    assert "private prompt" not in metrics and KEY_A not in metrics

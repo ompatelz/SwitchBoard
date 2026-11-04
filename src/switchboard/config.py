@@ -30,6 +30,9 @@ class GatewaySettings(BaseModel):
     redis_url: RedisDsn = DEFAULT_REDIS_URL
     cache_ttl_seconds: int = Field(default=300, ge=1, le=86_400)
     redis_timeout_seconds: float = Field(default=0.25, gt=0, le=5)
+    rate_limit_requests: int = Field(default=120, ge=1, le=100_000)
+    rate_limit_window_seconds: int = Field(default=60, ge=1, le=86_400)
+    upstream_concurrency_limit: int = Field(default=32, ge=1, le=10_000)
     upstream_connect_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     upstream_read_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
     upstream_write_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
@@ -83,6 +86,13 @@ class GatewaySettings(BaseModel):
                 "redis_url": os.getenv("SWITCHBOARD_REDIS_URL", str(DEFAULT_REDIS_URL)),
                 "cache_ttl_seconds": os.getenv("SWITCHBOARD_CACHE_TTL_SECONDS", "300"),
                 "redis_timeout_seconds": os.getenv("SWITCHBOARD_REDIS_TIMEOUT_SECONDS", "0.25"),
+                "rate_limit_requests": os.getenv("SWITCHBOARD_RATE_LIMIT_REQUESTS", "120"),
+                "rate_limit_window_seconds": os.getenv(
+                    "SWITCHBOARD_RATE_LIMIT_WINDOW_SECONDS", "60"
+                ),
+                "upstream_concurrency_limit": os.getenv(
+                    "SWITCHBOARD_UPSTREAM_CONCURRENCY_LIMIT", "32"
+                ),
                 "upstream_connect_timeout_seconds": os.getenv(
                     "SWITCHBOARD_UPSTREAM_CONNECT_TIMEOUT_SECONDS", "2.0"
                 ),

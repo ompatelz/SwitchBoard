@@ -8,7 +8,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import cast
 
+from switchboard.capacity import CapacityStream, UpstreamCapacity
 from switchboard.contracts import ChatCompletionRequest, ChatCompletionResponse
+from switchboard.metrics import GatewayMetrics, failure_category
 from switchboard.provider import (
     ChatProvider,
     ChatProviderStream,
@@ -171,6 +173,8 @@ class ReliableProviders:
         policy: RetryPolicy,
         clock: Callable[[], float] = time.monotonic,
         jitter: Callable[[], float] = random.random,
+        capacity: UpstreamCapacity | None = None,
+        metrics: GatewayMetrics | None = None,
     ) -> None:
         registry.get(primary, stream=False)
         if secondary is not None:
@@ -181,6 +185,42 @@ class ReliableProviders:
         self.policy = policy
         self.clock = clock
         self.jitter = jitter
+        self.capacity = capacity
+        self.metrics = metrics
+
+    async def _call(
+        self,
+        name: str,
+        adapter: ChatProvider,
+        request: ChatCompletionRequest,
+        *,
+        request_id: str,
+        stream: bool,
+    ) -> ChatCompletionResponse | ChatProviderStream:
+        permit = await self.capacity.acquire() if self.capacity is not None else None
+        started = self.clock()
+        stream_returned = False
+        try:
+            if stream:
+                opened = await adapter.open_stream(request, request_id=request_id)
+                stream_returned = True
+                return (
+                    CapacityStream(opened, permit, self.metrics, name, started, self.clock)
+                    if permit is not None or self.metrics is not None
+                    else opened
+                )
+            return await adapter.complete(request, request_id=request_id)
+        except BaseException:
+            if permit is not None:
+                permit.release()
+            raise
+        finally:
+            if self.metrics is not None and not stream_returned:
+                self.metrics.provider_duration.labels(provider=name).observe(
+                    max(0.0, self.clock() - started)
+                )
+            if not stream and permit is not None:
+                permit.release()
 
     async def complete(
         self, request: ChatCompletionRequest, *, request_id: str
@@ -213,6 +253,8 @@ class ReliableProviders:
             for name in (self.primary, self.secondary):
                 if name is None:
                     break
+                if name == self.secondary and self.metrics is not None:
+                    self.metrics.fallbacks.inc()
                 registered = self.registry.get(name, stream=stream)
                 for attempt in range(1, self.policy.max_attempts + 1):
                     if self.clock() >= deadline:
@@ -223,15 +265,16 @@ class ReliableProviders:
                         last_error = exc
                         break
                     try:
-                        if stream:
-                            result: (
-                                ChatCompletionResponse | ChatProviderStream
-                            ) = await registered.adapter.open_stream(request, request_id=request_id)
-                        else:
-                            result = await registered.adapter.complete(
-                                request, request_id=request_id
-                            )
+                        if attempt > 1 and self.metrics is not None:
+                            self.metrics.retries.labels(provider=name).inc()
+                        result = await self._call(
+                            name, registered.adapter, request, request_id=request_id, stream=stream
+                        )
                     except ProviderError as exc:
+                        if self.metrics is not None:
+                            self.metrics.provider_failures.labels(
+                                provider=name, category=failure_category(exc)
+                            ).inc()
                         registered.breaker.finish(
                             probe=probe, success=False, count_failure=is_retryable(exc)
                         )

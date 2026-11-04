@@ -8,7 +8,7 @@ LLM gateways can make routing and caching look simple while hiding difficult cor
 
 The project is a learning-focused, portfolio-grade backend and ML-systems implementation. Claims will be tied to reproducible tests and experiments rather than aspirational benchmark numbers.
 
-## Current scope: Phase 2B tenant authentication and exact cache
+## Current scope: Phase 2C request controls and metrics
 
 Phase 0 and Phase 1 are merged. This branch adds bounded mock-provider reliability while
 preserving the runnable two-service foundation:
@@ -42,6 +42,7 @@ pre-response fallback to a second mock endpoint, and a process-local circuit bre
 streaming semantics are documented in [`docs/failure-model.md`](docs/failure-model.md).
 Phase 2B requires a configured bearer API key and adds a tenant-scoped exact Redis cache for
 successful buffered calls. Streaming and secondary-provider policies bypass the cache.
+Phase 2C adds atomic tenant request windows, bounded worker upstream capacity, and baseline metrics.
 
 ## HTTP contracts
 
@@ -49,6 +50,8 @@ successful buffered calls. Streaming and secondary-provider policies bypass the 
 | --- | --- | --- |
 | Gateway | `GET /healthz` | `{"status":"ok","service":"gateway"}` |
 | Gateway | `GET /readyz` | `{"status":"ready","upstream":"mock-provider"}` when the mock provider is healthy |
+| Gateway | `GET /cachez` | Redis health status |
+| Gateway | `GET /metrics` | Process-local Prometheus metrics |
 | Gateway | `POST /v1/chat/completions` | Validated JSON completion or SSE stream from the configured provider |
 | Mock provider | `GET /healthz` | `{"status":"ok","service":"mock-provider"}` |
 | Mock provider | `POST /generate` | Stable `id`, `model`, and `text` derived from the validated request |
@@ -69,20 +72,34 @@ successful buffered calls. Streaming and secondary-provider policies bypass the 
 The exact supported Chat Completions fields, limits, and response shape are documented in
 [`docs/api-contract.md`](docs/api-contract.md).
 
-## Explicit non-goals for Phase 2B
+## Phase 2C request controls
 
-Phase 2B does **not** include:
+The gateway now enforces a Redis-backed fixed window per authenticated tenant before cache lookup.
+By default, each tenant gets 120 completion requests in a 60-second window that starts with its
+first request. Cache hits count. A 429 response includes `X-RateLimit-Limit`,
+`X-RateLimit-Remaining`, `X-RateLimit-Reset` (seconds until expiry), and `Retry-After`. If Redis
+cannot make the decision, the gateway returns 503 `rate_limit_unavailable` and makes no provider
+call. Cache-only command failures still fail open after an allowed decision.
+
+Each worker permits at most 32 active upstream calls or streams by default. A full worker returns
+503 `upstream_concurrency_exhausted` immediately. `/metrics` exports process-local Prometheus
+metrics with fixed, non-sensitive labels. See [ADR 0004](docs/adr/0004-rate-concurrency-metrics.md)
+for window, cleanup, and metric semantics. Token quotas and a dashboard remain deferred.
+
+## Explicit non-goals for Phase 2C
+
+Phase 2C does **not** include:
 
 - PostgreSQL, Qdrant, semantic caching, or learned model routing;
-- production key administration, rate limits, or real paid providers;
+- production key administration, token quotas, or real paid providers;
 - a dashboard, Kubernetes, Kafka, or paid-provider integration; or
 - performance, cost-saving, or production-readiness claims.
 
 ## Verified status
 
 The exact checks run for this subphase are recorded in [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md).
-Phase 0, Phase 1, and Phase 2A results are recorded in the status document. Phase 2B verification
-is recorded separately, including checks that could not run on the current machine.
+Phase 0, Phase 1, Phase 2A, Phase 2B, and Phase 2C results are recorded separately in the status
+document.
 
 ## Local development
 
@@ -102,7 +119,7 @@ Run the complete local quality suite:
 ```powershell
 uv run ruff check .
 uv run ruff format --check .
-uv run mypy src tests
+uv run mypy src tests examples
 uv run pytest
 uv build
 ```
@@ -125,8 +142,8 @@ $env:SWITCHBOARD_TENANT_KEY_HASHES_JSON = @{ dev = $digest } | ConvertTo-Json -C
 ```
 
 For direct local execution, start Redis at `127.0.0.1:6379` or configure
-`SWITCHBOARD_REDIS_URL`. If Redis is absent, allowed completions still reach the provider and
-`/cachez` reports 503. Never commit the raw key or a real `.env` file.
+`SWITCHBOARD_REDIS_URL`. If Redis is absent, completion requests return 503 because rate
+enforcement fails closed; `/cachez` also reports 503. Never commit the raw key or a real `.env` file.
 
 Run the gateway:
 
@@ -146,6 +163,7 @@ Exercise both services:
 Invoke-RestMethod http://127.0.0.1:8000/healthz
 Invoke-RestMethod http://127.0.0.1:8000/readyz
 Invoke-RestMethod http://127.0.0.1:8000/cachez
+Invoke-WebRequest http://127.0.0.1:8000/metrics
 Invoke-RestMethod http://127.0.0.1:8001/healthz
 Invoke-RestMethod -Method Post `
   -Uri http://127.0.0.1:8001/generate `
@@ -226,7 +244,7 @@ Compose sets the mock-provider and Redis service URLs, and requires the configur
 digest map. Redis is exposed only on host loopback port 6380 for the opt-in integration test.
 `localhost` inside the gateway container would point back to the gateway container.
 
-`.env.example` documents provider, cache, auth, and timeout settings. Set them in the shell or
+`.env.example` documents provider, cache, auth, request controls, and timeout settings. Set them in the shell or
 through a process/container environment; the
 application does not silently load `.env` files. Never commit `.env` or real credentials.
 
@@ -242,8 +260,14 @@ application does not silently load `.env` files. Never commit `.env` or real cre
   `/v1` suffix, as shown above.
 - **A completion returns 401:** configure the server-side digest map and send its matching raw key
   as a bearer token. Missing, invalid, and revoked keys intentionally share one error.
-- **`/cachez` is 503:** check Redis and `SWITCHBOARD_REDIS_URL`. The cache fails open; `/readyz`
-  checks the required mock provider separately.
+- **`/cachez` is 503:** check Redis and `SWITCHBOARD_REDIS_URL`. Completions fail closed when the
+  Redis rate decision is unavailable; `/readyz` checks the mock provider separately.
+- **A completion returns `rate_limit_exceeded`:** inspect the limit and reset headers. The Redis
+  tenant window includes cache hits and failed provider calls; wait for expiry or adjust the
+  configured request policy for local tests.
+- **A completion returns `upstream_concurrency_exhausted`:** inspect
+  `switchboard_upstream_inflight` and streaming clients. This worker rejects instead of queueing
+  when its active upstream calls or streams reach the configured bound.
 - **An SDK failure appears more than once:** set `max_retries=0` while diagnosing the Phase 1
   baseline; current SDK defaults may retry selected connection and HTTP failures.
 - **The e2e test is skipped:** this is expected during the ordinary unit/integration suite. Start both services and set `SWITCHBOARD_E2E=1` to opt into real-socket testing.
