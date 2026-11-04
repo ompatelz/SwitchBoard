@@ -2,10 +2,112 @@
 
 ## Current phase
 
-- **Phase:** 1 — Real working gateway MVP
-- **Subphase:** 1D — SDK compatibility and MVP acceptance gate
-- **State:** Complete; branch pushed, PR #2 open and intentionally unmerged, hosted checks green
-- **Updated:** 2026-10-28 (Asia/Calcutta)
+- **Phase:** 2 — Backend reliability, tenant isolation, exact caching, and request controls
+- **Subphase:** 2D — Fault-injection gate and local baseline measurements
+- **State:** Local acceptance gate passed on `codex/phase-2-backend-reliability`; review state is tracked on GitHub
+- **Updated:** 2026-11-04 (Asia/Calcutta)
+
+## Phase 2D acceptance evidence
+
+- [Fault matrix](fault-matrix.md) maps all requested scenarios to deterministic injected,
+  real-loopback, or real-Redis tests. Phase 2D added concurrent same-key miss and graceful
+  in-flight-stream shutdown checks, a demand-driven slow-consumer check, and provider 503 coverage.
+- The ordinary full suite after the first Phase 2D test additions reported **113 passed, 4
+  intentional opt-in skips**. Two live end-to-end and two real-Redis tests passed in Compose.
+  The benchmark profile's two gateway workers, mock provider, and Redis all passed health checks.
+- The [benchmark](benchmark-results.md) used three runs of 30 requests per path. Direct mock,
+  uncached gateway, cache miss, warmed hit, and concurrency-four results had zero HTTP errors.
+  Cache counters measured 90 hits, 183 misses/writes including warmups, and 90 bypasses in the
+  separate uncached gateway. Raw timing files are versioned beside the report.
+- With Redis deliberately stopped, one live probe and then 90 measured requests returned the
+  documented 503 `rate_limit_unavailable`. Compose removed all services and its network after
+  each experiment. These are mock-only local results, not real-provider claims.
+- Final local checks: `uv lock --check`, `uv run ruff check .`, `uv run ruff format --check .`
+  (48 Python files), `uv run mypy src tests examples scripts` (36 source files), and `uv build`
+  passed. The full suite reported **115 passed, 4 opt-in skips**. A fresh locked installation in
+  an isolated temporary environment installed 37 packages, imported the installed gateway, and
+  repeated the full suite with **115 passed, 4 opt-in skips**.
+- `git diff --check` passed. Only `.env.example` is tracked among `.env` and `.env.example`;
+  a focused scan of documentation, examples, and measurement data found no key or credential
+  pattern. The original checkout's unrelated `mock_provider.py` edit remains outside this worktree.
+  A fresh fetch showed `origin/main` at `0c446b7`, an ancestor of this Phase 2 branch. The local
+  gate does not imply hosted CI or deployment success.
+
+## Phase 2C handoff
+
+- Redis Lua atomically increments one hashed-tenant fixed-window counter and returns TTL. Defaults
+  are 120 requests per 60 seconds. Every authenticated completion consumes one decision, including
+  cache hits. Exhaustion returns stable 429 and request-limit headers; Redis enforcement failure
+  fails closed with stable 503 before cache or provider work.
+- Each gateway worker has a process-local semaphore for at most 32 active upstream attempts or
+  streams by default. Saturation rejects immediately. Buffered, failed, cancelled, and closed
+  streaming calls release permits; retry backoff does not hold capacity.
+- `/metrics` exports process-local Prometheus counters, gauges, and histograms with fixed labels.
+  No tenant, API key, request ID, prompt, answer, URL, or exception text becomes a label.
+- Unit and integration coverage includes tenant isolation, cache-hit charging, Redis outage,
+  retry/fallback metric labels, cancellation cleanup, stream-held permits, and concurrent decisions.
+- Final verification: `uv lock --check`, `uv run ruff check .`,
+  `uv run ruff format --check .` (44 files), `uv run mypy src tests examples` (34 source files),
+  and `uv build` passed. The ordinary suite reported **111 passed, 4 intentional opt-in skips**.
+  Compose built the locked image and all three services were healthy. Two live end-to-end tests
+  and two opt-in real Redis tests passed. Compose removed its containers and network; a subsequent
+  Docker process listing showed no Switchboard containers. `git diff --check` passed, and only
+  `.env.example` is tracked among `.env` and `.env.example`.
+- One restricted Windows rerun could not write uv's temporary interpreter cache, and its in-process
+  HTTP test hung. The final ordinary pytest and package build passed outside that restriction;
+  no application failure was observed in those checks.
+- Next: Phase 2D fault-injection gate and measurements only after the owner says “continue.”
+
+## Phase 2B handoff
+
+- The gateway now injects a typed `TenantIdentity` from configured, hashed development API keys.
+  Missing, invalid, and revoked keys share a stable 401 response and make no provider/cache call.
+- An empty key map rejects all completion requests. Raw development keys are generated locally and
+  are not stored in Git; a configuration update and restart applies revocation.
+- A lifespan-owned asynchronous Redis client serves an exact cache for successful buffered
+  requests with one configured provider. Streaming and secondary-provider policies bypass it.
+- The key hashes canonical tenant, validated request fields/defaults, provider identity, and schema
+  version. Redis keys do not contain raw prompts. `SET EX` stores a configured TTL.
+- Redis lookup/write outages and corrupt entries fail open to the provider; `/cachez` reports cache
+  health independently of `/readyz`. Shutdown closes the Redis client.
+- Unit and in-process tests cover key determinism, cross-tenant separation, hits, input changes,
+  expiry, corruption, outage, authentication rejection, streaming bypass, and cleanup.
+- `uv sync --locked --all-groups` completed with redis-py 8.1.0 in the worktree environment.
+  `uv lock --check`, Ruff, formatting (39 Python files), strict mypy (30 source files), and
+  `uv build` passed. The full ordinary suite reported **105 passed, 3 intentional opt-in skips**.
+- Compose built the locked image and started the gateway, mock provider, and Redis 7.4; all three
+  health checks passed. The two live end-to-end tests and one real Redis TTL integration test
+  passed. Compose then removed all three containers and its scoped network.
+- The CI Compose job now generates a fresh development key at runtime, then runs the same live
+  end-to-end and Redis integration tests. Hosted CI results are not yet available because Phase 2
+  has not been pushed.
+- Next: Phase 2C atomic rate limits, bounded upstream concurrency, and metrics only after the owner
+  says “continue.”
+
+## Phase 2A handoff
+
+- Phase 1 PR #2 was merged into `main` at `0c446b7`; the Phase 1 head is an ancestor of that merge.
+- The Phase 2 branch was created from that merge in an isolated worktree. An unrelated uncommitted
+  edit to `src/switchboard/mock_provider.py` on the original Phase 1 checkout was preserved.
+- Named primary and optional secondary mock adapters are selected through `ProviderRegistry`.
+- Typed retry classification, finite sequential attempts, capped jitter/backoff, valid bounded
+  `Retry-After`, one overall pre-response deadline, and cancellation propagation are implemented.
+- Each provider has a process-local closed/open/half-open breaker with one half-open probe.
+- Fallback happens only before buffered output or the first validated stream event. The Phase 1
+  post-output no-splice rule remains.
+- Mock failure scenarios and deterministic fake-adapter/breaker tests cover provider errors,
+  retries, fallback, deadlines, cancellation, and transitions.
+- `docs/failure-model.md` and ADR 0002 record exact semantics and limits.
+- Local verification: Ruff check passed; format check passed (32 Python files); strict mypy passed
+  (24 source files); pytest reported **91 passed, 2 intentional e2e skips**.
+- The untouched merged Phase 1 baseline was verified in a separate temporary worktree: Ruff check,
+  format check (27 Python files), and mypy (21 source files) passed; pytest reported **67 passed,
+  2 intentional e2e skips**. The temporary baseline worktree was removed afterward.
+- Clean `uv sync --locked --all-groups` could not finish because the restricted environment could
+  not resolve PyPI. Tests used the existing local Python 3.12.9 environment with this worktree's
+  `src` directory on `PYTHONPATH`; this is not a clean-install claim.
+- Next: Phase 2B tenant authentication and exact Redis caching only after the owner says
+  “continue.”
 
 ## Completed behavior
 
@@ -291,13 +393,14 @@ Phase 0D clean-start verification:
 - `POST /generate` is a project test contract, not an OpenAI-compatible endpoint.
 - Streaming usage is omitted because the current mock stream does not provide trustworthy usage;
   the gateway does not estimate it.
-- There are no retries, fallback providers, authentication, or paid-provider integrations.
+- There are bounded mock-provider retries, optional fallback, and development API-key
+  authentication; paid-provider integrations and production key administration are absent.
+- Concurrent cache misses may duplicate provider work; no singleflight or stampede claim is made.
 - Compatibility covers only the documented Chat Completions subset, not every parameter exposed
   by the OpenAI SDK.
 - No deployment target exists, so CD remains intentionally absent.
-- Phase 1 has no deployment target; PR #2 is intentionally unmerged pending owner review.
+- Phase 2 has no deployment target yet.
 
 ## Next subphase
 
-Phase 1 is complete and awaiting owner review in PR #2. Do not merge or start Phase 2 without the
-owner's instruction. Phase 2A remains proposal-only.
+Phase 2D is the final acceptance subphase. Stop after its local gate, push, and unmerged PR.

@@ -119,12 +119,10 @@ The Phase 1 acceptance gate uses the standard OpenAI Python SDK 3.40.0 against
 `stream=True` deserialize into the SDK's typed completion and chunk objects. The runnable example
 is [`../examples/openai_sdk_chat.py`](../examples/openai_sdk_chat.py).
 
-The SDK requires a non-empty API key to construct its client, so the local example supplies the
-harmless value `switchboard-local-placeholder`. Switchboard does not authenticate that value in
-Phase 1; tenant authentication is explicitly deferred. The example sets `max_retries=0` because
-the SDK retries selected failures by default, while the Phase 1 baseline intentionally performs no
-automatic retry or fallback. Its five-second client timeout is separate from the gateway's bounded
-upstream connect, read, write, and pool timeouts.
+The local example reads `SWITCHBOARD_API_KEY`, whose SHA-256 digest must be configured for a
+development tenant on the gateway. The example sets `max_retries=0` so SDK retries do not obscure
+gateway attempts. Its five-second client timeout is separate from the gateway's bounded upstream
+connect, read, write, and pool timeouts.
 
 ## Validation and failure semantics
 
@@ -147,9 +145,13 @@ Gateway errors use this non-sensitive envelope:
 
 | Condition | HTTP status | Stable code |
 | --- | ---: | --- |
+| Missing, invalid, or revoked bearer API key | 401 | `invalid_api_key` |
 | Malformed JSON | 400 | `invalid_json` |
 | Request validation failure | 422 | `invalid_request` |
 | Provider rate limit | 429 | `provider_rate_limited` |
+| Tenant request window exceeded | 429 | `rate_limit_exceeded` |
+| Redis rate decision unavailable | 503 | `rate_limit_unavailable` |
+| This worker's upstream capacity exhausted | 503 | `upstream_concurrency_exhausted` |
 | Provider connection failure | 502 | `provider_connection_error` |
 | Provider rejected a gateway-valid request | 502 | `provider_rejected_request` |
 | Invalid provider JSON/schema/status | 502 | `invalid_provider_response` |
@@ -157,8 +159,44 @@ Gateway errors use this non-sensitive envelope:
 | Connect, read, write, or pool timeout | 504 | `provider_timeout` |
 
 Provider URLs, response bodies, credentials, stack traces, and internal exception strings are not
-included. The gateway does not retry or fall back, so one client request causes at most one
-provider completion request in Phase 1C.
+included. In Phase 2A, eligible mock-provider failures may cause bounded attempts and optional
+pre-response fallback. See [`failure-model.md`](failure-model.md). The public response shape is
+unchanged. A started stream is never retried or spliced.
+
+Phase 2B requires `Authorization: Bearer <API key>` for completion requests. Missing, invalid, and
+revoked keys all return the same `authentication_error` envelope and `WWW-Authenticate: Bearer`.
+`/healthz`, `/readyz`, and `/cachez` remain unauthenticated operational endpoints. `/cachez`
+returns `{"status":"ok"}` or HTTP 503 with `{"status":"unavailable"}`. Only successful
+non-streaming calls under a single-provider policy use the exact cache; the response body stays
+identical on a hit. Streaming bypasses it.
+
+## Phase 2C request limits and operational endpoint
+
+Every authenticated, validated completion request, including a cache hit, uses one tenant-specific
+fixed-window request decision. The defaults are 120 requests per 60-second window. The first
+decision starts that tenant's window. Allowed responses include `X-RateLimit-Limit` (configured
+maximum), `X-RateLimit-Remaining` (nonnegative requests left after this decision), and
+`X-RateLimit-Reset` (seconds until this Redis window expires). Exceeding the limit returns a
+`rate_limit_error` envelope with HTTP 429 and code `rate_limit_exceeded`, plus the three headers
+and `Retry-After` in seconds. A Redis enforcement failure returns 503
+`rate_limit_unavailable` before cache or provider work. These headers describe Switchboard's
+request policy; they do not describe provider-side 429s or token usage.
+
+The worker admits at most `SWITCHBOARD_UPSTREAM_CONCURRENCY_LIMIT` active upstream attempts or
+streams (default 32). A full worker rejects immediately with HTTP 503
+`upstream_concurrency_exhausted`. The limit is per worker, while the Redis request window is
+shared by workers configured to use the same Redis database. No wait queue is created.
+
+`GET /metrics` is an unauthenticated operational endpoint returning Prometheus exposition text.
+It includes process-local HTTP requests and duration, provider attempts and failures, retry and
+fallback counts, circuit state, cache outcomes, rate rejections, and upstream capacity. It has no
+tenant or request identifiers. Bind this endpoint to a trusted network when deploying beyond
+local development.
+
+The Phase 2D [fault matrix](fault-matrix.md) exercises the response boundary for transport errors,
+provider 429/500/503, malformed upstream data, partial streams, Redis loss, and saturation. The
+[benchmark](benchmark-results.md) measures the buffered mock path only. It does not extend the
+accepted Chat Completions fields or claim real-provider latency.
 
 ## Timeouts and resource ownership
 

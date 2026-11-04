@@ -1,10 +1,13 @@
 """Integration tests for the gateway's shared upstream client."""
 
+from typing import cast
+
 import httpx
 from fastapi.testclient import TestClient
 
 from switchboard.config import GatewaySettings
 from switchboard.gateway import create_app
+from switchboard.provider import HttpxMockProvider
 
 
 def healthy_upstream(request: httpx.Request) -> httpx.Response:
@@ -19,7 +22,10 @@ def test_lifespan_creates_and_closes_one_shared_client() -> None:
 
     with TestClient(application):
         client = application.state.http_client
-        provider = application.state.chat_provider
+        provider = cast(
+            HttpxMockProvider,
+            application.state.provider_registry.get("primary", stream=False).adapter,
+        )
         assert isinstance(client, httpx.AsyncClient)
         assert provider.client is client
         assert not client.is_closed

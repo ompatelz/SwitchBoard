@@ -1,6 +1,8 @@
 """Small provider boundary and HTTP adapter for Chat Completions."""
 
 from collections.abc import AsyncGenerator, AsyncIterator
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Literal, Protocol
 
 import httpx
@@ -32,6 +34,10 @@ class ProviderRejectedRequestError(ProviderError):
 
 class ProviderRateLimitError(ProviderError):
     """The provider reported rate limiting."""
+
+    def __init__(self, retry_after_seconds: float | None = None) -> None:
+        super().__init__()
+        self.retry_after_seconds = retry_after_seconds
 
 
 class ProviderServerError(ProviderError):
@@ -80,10 +86,28 @@ class ChatProvider(Protocol):
         ...
 
 
+def _retry_after(response: httpx.Response) -> float | None:
+    """Accept nonnegative delta seconds or HTTP dates, capped to one minute."""
+    value = response.headers.get("retry-after", "")
+    try:
+        seconds = float(value)
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(value)
+            if retry_at.tzinfo is None:
+                return None
+            seconds = (retry_at - datetime.now(UTC)).total_seconds()
+        except (TypeError, ValueError, IndexError, OverflowError):
+            return None
+    if not 0 <= seconds <= 60:
+        return None
+    return seconds
+
+
 def _translate_status(response: httpx.Response) -> None:
     """Raise one stable provider-boundary exception for a non-success status."""
     if response.status_code == 429:
-        raise ProviderRateLimitError
+        raise ProviderRateLimitError(_retry_after(response))
     if 400 <= response.status_code < 500:
         raise ProviderRejectedRequestError
     if response.status_code >= 500:

@@ -2,11 +2,28 @@
 
 ## Status and scope
 
-This document describes the merged Phase 0 foundation plus the accepted Phase 1 gateway MVP. The
+This document describes the merged Phase 0 foundation, accepted Phase 1 gateway MVP, and current
+Phase 2A–2D work. The
 broader product direction remains in [`BUILD_CONTRACT.md`](BUILD_CONTRACT.md); it is not an
 assertion that those systems already exist.
 
-## Current architecture: Phase 1 gateway MVP
+## Current architecture: Phase 2C request controls over tenant auth and exact cache
+
+The completion route first receives a typed `TenantIdentity` through FastAPI dependency injection.
+An `ApiKeyAuthenticator` compares the incoming bearer key's SHA-256 digest with configured tenant
+digests and rejects unknown or revoked keys. For an eligible buffered request, `ExactCache` hashes
+canonical tenant, provider-policy, schema, and request data into a Redis key. A valid hit returns
+without upstream work. Misses, corrupt entries, and isolated cache-command failures proceed to the provider after a valid rate decision. A
+successful provider result is stored with `SET EX`; write failure does not change the response.
+Streaming and configured-secondary policies bypass the cache. See
+[`ADR 0003`](adr/0003-tenant-auth-exact-cache.md).
+
+The public route now receives a lifespan-owned `ReliableProviders` object. It selects a named
+adapter from `ProviderRegistry`, consults that adapter's process-local breaker, and makes bounded
+sequential attempts under one deadline. The optional secondary is a second configured mock URL and
+HTTP client. Circuit state remains process-local. See
+[`failure-model.md`](failure-model.md) and [ADR 0002](adr/0002-retry-fallback-circuit.md) for exact
+failure transitions, limits, and cancellation rules.
 
 The current system is an installable Python distribution containing two independent FastAPI/ASGI applications connected by one minimal readiness request:
 
@@ -25,21 +42,25 @@ test client -- POST /v1/chat/completions --> strict contract --> deterministic C
 Uvicorn runs each application as a separate process. FastAPI routes requests and serializes responses; strict Pydantic models reject unknown or invalid fields. The mock response is a pure function of a canonical JSON representation of the validated request, so it has no dependency on randomness, time, network calls, or process-local state.
 
 The Chat Completions request and response models live in the shared boundary-contract module.
-The gateway depends on the small `ChatProvider` protocol; its current `HttpxMockProvider` adapter
-borrows the lifespan-managed client. There is no persistent store, cache, router, retry, fallback,
-or evaluation workload.
+The gateway depends on the small `ChatProvider` protocol; `ReliableProviders` composes named
+`HttpxMockProvider` adapters that borrow lifespan-managed clients. Redis holds exact cache entries
+and rate counters. There is no PostgreSQL, semantic cache, learned router, or representative
+evaluation workload.
 
 ```mermaid
 flowchart LR
-    C[Local client or smoke test] -->|GET /healthz| G[Gateway FastAPI app]
-    C -->|GET /readyz| G
-    C -->|POST /generate| M[Mock-provider FastAPI app]
-    C -->|POST /v1/chat/completions| G
-    G -->|buffered JSON or SSE through ChatProvider| M
-    G -->|shared HTTPX client: GET /healthz| M
-    L[Gateway lifespan] -->|create at startup| H[AsyncClient connection pool]
-    H --> G
-    L -->|close at shutdown| H
+    C[Client] -->|POST completion| G[Gateway]
+    G --> A[Authenticate tenant]
+    A --> R[Redis atomic rate decision]
+    R --> K[Exact cache if eligible]
+    K --> P[Local capacity and circuit]
+    P --> H[Shared HTTPX pool]
+    H --> M[Mock provider]
+    L[Gateway lifespan] --> H
+    L --> R
+    L --> K
+    L --> P
+    G --> T[Local metrics registry]
 ```
 
 ## Application factories
@@ -57,9 +78,15 @@ gateway: GET /healthz
 gateway: POST /v1/chat/completions
   -> request-ID middleware
   -> strict ChatCompletionRequest validation
-  -> injected ChatProvider protocol
-  -> HttpxMockProvider using shared AsyncClient
+  -> bearer-key authentication and TenantIdentity injection
+  -> atomic Redis tenant request decision or 429/503 rejection
+  -> eligible exact-cache lookup or bypass
+  -> process-local upstream capacity admission or immediate 503 rejection
+  -> injected ChatProvider protocol backed by ReliableProviders
+  -> registry selection, circuit admission, bounded attempts, optional pre-response fallback
+  -> HttpxMockProvider using its lifespan-managed AsyncClient
   -> validated ChatCompletionResponse, validated SSE stream, or stable preflight error
+  -> successful eligible buffered response written to Redis with TTL
   -> request ID response header
 
 mock: POST /generate
@@ -83,9 +110,11 @@ boundary, not the public gateway.
 
 ## Resource lifecycle
 
-The gateway's lifespan context creates one `httpx.AsyncClient` before accepting requests, stores it
-in application state, gives the provider adapter a borrowed reference, and closes it after the
-lifespan exits. Readiness and completion requests reuse that client and connection pool. Buffered
+The gateway's lifespan context creates the primary `httpx.AsyncClient` and, when configured, a
+secondary client before accepting requests. It stores them through adapters in application state
+and closes both after the lifespan exits. It also owns one asynchronous Redis client and pool,
+closed at shutdown. Readiness and primary completion requests reuse the
+primary client and connection pool. Buffered
 provider responses are explicitly closed after validation. A streaming adapter owns its open
 response, prefetched first event, and SSE parser until the gateway generator completes or is
 cancelled. The generator yields only when the downstream server requests another item, naturally
@@ -98,7 +127,11 @@ Creating a client per request was rejected because it would discard connection p
 
 ## Container topology
 
-Both services use one locked, non-root image, built once from the mock-provider service definition and reused by the gateway. Compose starts the mock provider first, waits for its `/healthz`, then starts the gateway with `SWITCHBOARD_MOCK_PROVIDER_URL=http://mock-provider:8001`. Gateway health checks call `/readyz`, proving service discovery and upstream reachability rather than process liveness alone. Only ports 8000 and 8001 are published to host loopback.
+The gateway and mock provider use one locked, non-root image. Compose also runs Redis 7.4 with a
+health check and ephemeral cache data. It requires a development tenant digest map in the local
+environment, then starts the gateway with service DNS URLs for the mock and Redis. Gateway
+`/readyz` checks the required provider; `/cachez` checks optional Redis separately. Ports 8000,
+8001, and Redis test port 6380 are bound to host loopback only.
 
 ## Streaming failure boundary
 
@@ -112,16 +145,43 @@ that completion is unknown.
 
 The standard OpenAI Python SDK is an external client of the public HTTP contract; it is not used
 inside the gateway or provider adapter. The verified client points `base_url` at Switchboard's
-local `/v1` prefix, supplies a placeholder key because the SDK requires one, disables SDK retries,
+local `/v1` prefix, supplies the configured development tenant key, disables SDK retries,
 and exercises buffered and streaming Chat Completions. This proves the declared wire subset can be
 consumed as typed SDK objects without coupling Switchboard's implementation to SDK internals.
 
-Authentication is not implied by the placeholder key. Phase 1 accepts the SDK's Authorization
-header but has no tenant identity or authorization policy. Those controls remain Phase 2 work.
+The SDK sends that key as a bearer token. The gateway authenticates it into a tenant identity;
+per-tenant authorization policies remain deferred.
+
+## Phase 2C request path and state
+
+The completion route authenticates a development key, then awaits one Redis-backed rate decision
+before reading the exact cache. Cache hits count toward the tenant's request rate. On a miss or
+cache bypass, `ReliableProviders` acquires a process-local upstream permit for each attempted
+provider call. A buffered attempt releases it when the call ends; a streaming attempt transfers it
+to `CapacityStream`, which releases it when the stream closes. Retry backoff holds no permit.
+The Redis Lua counter and TTL are shared by all gateway workers using the same Redis database;
+the semaphore, circuit breakers, HTTPX pools, and metric registry belong to one worker process.
+
+The route and cache use awaited redis-py commands and the provider adapter uses awaited HTTPX
+calls. No synchronous Redis request runs on the event loop. A private Prometheus registry on each
+FastAPI application exports `/metrics`; the endpoint skips self-measurement and exposes only fixed
+label sets. Request timing ends after the final ASGI response body, including a streaming body.
+The `rate_limit_unavailable` response is fail-closed; isolated cache command failures remain
+fail-open after enforcement succeeds. See [ADR 0004](adr/0004-rate-concurrency-metrics.md).
+
+The request-rate counter is distinct from the local upstream permit count, HTTPX connection-pool
+capacity, and provider-side 429 behavior. The first controls tenant request volume across workers;
+the second protects a worker's active upstream work; the pool controls its sockets; a provider 429
+is an upstream response that follows the bounded retry policy.
+
+Phase 2D runs a second, opt-in benchmark gateway with a configured secondary mock endpoint that
+points to the same mock service. That policy bypasses exact caching, yielding a buffered uncached
+comparison path. It is a measurement fixture, not a new production routing mode. The fault matrix
+uses in-process injection for typed failures, loopback Uvicorn for streaming/shutdown, and real
+Redis for atomic rate and TTL behavior. See [fault matrix](fault-matrix.md) and
+[benchmark results](benchmark-results.md).
 
 ## Deferred architecture
 
-Redis, PostgreSQL, Qdrant, authentication, tenant budgets, semantic caching, policy routing,
-circuit breakers, metrics infrastructure, replay evaluation, and production deployment remain
-deferred. Their appearance in the build contract is roadmap context, not current implementation
-status.
+PostgreSQL, Qdrant, production key administration, tenant budgets, semantic caching, learned policy
+routing, metrics aggregation/dashboard, representative replay evaluation, and production deployment remain deferred.
