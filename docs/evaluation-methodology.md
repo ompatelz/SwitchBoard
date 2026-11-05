@@ -18,7 +18,13 @@ The held-out examples must not guide model choice, prompt rules, or threshold se
 
 ## Planned measurements
 
-After the embedding worker and retrieval path exist, sweep thresholds using only calibration data.
+The worker and retrieval path now exist for a reviewed synthetic fixture, but the live `0.98`
+default and local-smoke `0.94` threshold are provisional. No threshold has been selected from
+labels. Fixture subjects `stack`, `heap`, and `hash table` are disjoint from both dataset
+partitions, preventing a demonstration prompt from leaking into calibration or held-out evidence.
+The fixture does not make the current dataset eligible for live reuse.
+
+In the next slice, sweep thresholds using only calibration data.
 Choose a threshold from a declared false-positive risk budget, then freeze it before measuring on
 held-out data. Report the selected model/version, normalization, vector dimension, cosine formula,
 candidate count, compatibility rules, and every denominator. A false positive is an accepted

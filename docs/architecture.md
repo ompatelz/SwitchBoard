@@ -7,7 +7,7 @@ isolated embedding worker. The
 broader product direction remains in [`BUILD_CONTRACT.md`](BUILD_CONTRACT.md); it is not an
 assertion that those systems already exist.
 
-## Current architecture: gateway controls, exact cache, and optional embedding worker
+## Current architecture: gateway controls and optional guarded semantic cache
 
 The completion route first receives a typed `TenantIdentity` through FastAPI dependency injection.
 An `ApiKeyAuthenticator` compares the incoming bearer key's SHA-256 digest with configured tenant
@@ -44,10 +44,10 @@ Uvicorn runs each application as a separate process. FastAPI routes requests and
 The Chat Completions request and response models live in the shared boundary-contract module.
 The gateway depends on the small `ChatProvider` protocol; `ReliableProviders` composes named
 `HttpxMockProvider` adapters that borrow lifespan-managed clients. Redis holds exact cache entries
-and rate counters. There is no PostgreSQL, semantic cache, learned router, or representative
-evaluation workload. An isolated FastAPI embedding worker is available through an opt-in Compose
-profile. It owns a pinned CPU ONNX model and bounded inference threads, but the gateway does not
-call it yet. See [embedding-service.md](embedding-service.md) for its contract and ownership.
+and rate counters. When explicitly enabled, the gateway also owns an HTTP embedding client and
+Qdrant repository. The worker owns the pinned CPU ONNX model and bounded inference threads;
+Qdrant stores tenant-filtered vectors and exact-response references. See
+[embedding-service.md](embedding-service.md) and [semantic-cache-design.md](semantic-cache-design.md).
 
 ```mermaid
 flowchart LR
@@ -83,12 +83,15 @@ gateway: POST /v1/chat/completions
   -> bearer-key authentication and TenantIdentity injection
   -> atomic Redis tenant request decision or 429/503 rejection
   -> eligible exact-cache lookup or bypass
+  -> optional default-deny semantic eligibility, embedding, tenant-filtered Qdrant search,
+     threshold and compatible exact-response reference check
   -> process-local upstream capacity admission or immediate 503 rejection
   -> injected ChatProvider protocol backed by ReliableProviders
   -> registry selection, circuit admission, bounded attempts, optional pre-response fallback
   -> HttpxMockProvider using its lifespan-managed AsyncClient
   -> validated ChatCompletionResponse, validated SSE stream, or stable preflight error
   -> successful eligible buffered response written to Redis with TTL
+  -> optional vector and exact-key reference written to Qdrant
   -> request ID response header
 
 mock: POST /generate
@@ -185,5 +188,6 @@ Redis for atomic rate and TTL behavior. See [fault matrix](fault-matrix.md) and
 
 ## Deferred architecture
 
-PostgreSQL, Qdrant, production key administration, tenant budgets, semantic caching, learned policy
-routing, metrics aggregation/dashboard, representative replay evaluation, and production deployment remain deferred.
+PostgreSQL, production key administration, tenant budgets, semantic reuse for real providers,
+learned policy routing, metrics aggregation/dashboard, representative replay evaluation, and
+production deployment remain deferred. Threshold calibration and held-out measurement are pending.

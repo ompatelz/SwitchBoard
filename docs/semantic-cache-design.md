@@ -1,57 +1,20 @@
 # Guarded semantic cache design
 
-## Implemented foundation
+## Active boundary
 
-`semantic_policy.evaluate_lookup` is a pure default-deny decision. The gateway does not call it yet,
-so live requests still use the existing exact Redis cache and provider path. The future integration
-must run after validation, tenant authentication, request controls, and exact-cache lookup.
+Semantic reuse is disabled by default. The only live eligible model is the synthetic `static-definition-fixture-v1` fixture, with server-reviewed subjects `stack`, `heap`, and `hash table`. These subjects are disjoint from the labeled evaluation dataset. Ordinary `mock-v1` responses depend on the exact prompt and bypass semantic reuse. The fixture demonstrates isolation and failure behavior; it supplies no production quality evidence.
 
-The policy requires trusted server-side classification as a static definition, a compatible single
-provider policy, an explicit non-sensitive designation, non-streaming mode, a server-allowlisted model, exactly
-one user text message, and a narrow definition-question syntax. Freshness, negation, and output-format
-terms are rejected. Unknown tasks and missing trusted facts bypass. The public request contract
-rejects tools, multimodal content, and unsupported parameters before this policy can run. This
-syntax guard is deliberately incomplete: it does not prove that all accepted questions are safe.
-The future retrieval gate must still compare compatible metadata, a calibrated score, and any
-additional answer-equivalence rules; a high cosine score alone cannot authorize reuse.
-The current `mock-v1` provider emits prompt-derived fixture text and is not allowlisted for semantic
-reuse. Unit tests use an abstract evaluation model to exercise the policy only.
+After request validation, tenant authentication, and the Redis rate decision, the gateway checks the exact cache first. An exact miss runs the pure default-deny eligibility policy. Eligible buffered requests are embedded by the isolated worker, searched in Qdrant with server-derived filters, and accepted only above the configured score threshold with a matching subject digest and a valid same-scope exact Redis response reference. Otherwise the provider executes. Successful eligible provider responses are written once to Redis, and a vector plus metadata and exact-key reference is written to Qdrant. Streaming bypasses this path.
 
-`evaluate_storage` repeats request eligibility and requires a nonempty successful buffered response
-with the requested model and stop finish reason. Decisions return one finite `EligibilityReason`
-code; bypasses have no scope and need no embedding. No raw prompt or answer is placed in a reason.
+Qdrant search requires tenant digest, requested model, provider policy, embedding revision, semantic-policy version, cache-schema version, subject digest, and unexpired timestamp filters. The repository rechecks candidate payloads after search and sorts equal scores deterministically. Client input cannot choose a tenant or provider policy. Redis reference reads separately validate tenant, model, policy, and key form. Exact cache schema version 2 invalidates older entries. Neither Qdrant payload nor metrics contain raw prompts or answers.
 
-`SemanticScope` carries authenticated tenant ID, requested model, server-selected provider policy,
-embedding-model version, semantic-policy version, and semantic-cache schema version. The embedding
-version is a required input; the pinned worker model is now selected, but the gateway has not loaded
-or called it. Every field must be
-included in future vector filtering and response-reference compatibility checks. Client fields
-cannot override tenant or policy scope. The scope has no raw prompt or answer.
+The pinned BGE-small ONNX worker returns normalized 384-dimensional vectors. Qdrant uses cosine similarity. The default `0.98` threshold is provisional; a `0.94` setting was used only for local smoke testing after the `stack` paraphrase measured `0.949328` on this host. Similarity is a ranking signal, not proof that answers are interchangeable. The subject gate and response reference are additional hard requirements. The later calibration slice must select a threshold using calibration pairs, freeze it, and measure held-out outcomes. Current fixture behavior must not be called measured precision, coverage, or quality improvement.
 
-## Isolated embedding capability
+Entries use a 300-second exact-cache TTL. Qdrant candidates carry an expiry timestamp, are excluded at read time, and are pruned at startup and approximately hourly. A dangling, corrupt, expired, or mismatched Redis reference misses safely. Embedding or Qdrant failures are bounded bypasses to the provider after the rate decision. The worker and Qdrant are internal services on a trusted local network; their loopback ports are for development. Semantic metrics have fixed result labels without tenant or text content. See [ADR 0006](adr/0006-tenant-filtered-semantic-references.md).
 
-The [embedding service](embedding-service.md) now exists as an optional Compose service. It owns
-the pinned local ONNX model, inference threads, bounded admission, and `/embed` contract. A typed
-HTTP client with explicit timeout categories exists for the next integration step, but the gateway
-does not instantiate it or send prompts. No semantic cache lookup is active. The model revision is
-fixed, so a later vector collection must reject embeddings made by any other revision.
+## Alternatives and limits
 
-## Future storage and failure boundaries
-
-Qdrant and gateway integration are deferred. Before connecting them, decide where response bodies
-live, set a common TTL and deletion rule for vectors and response references, and reject dangling or
-corrupt references. Search must apply server-controlled tenant and all version filters before
-candidate acceptance. Embedding or vector failure must bypass to the provider after a valid rate
-decision. Streaming stays on its existing path. Bounded, fixed-label metrics should count each
-reason without placing tenant IDs or content in labels.
-
-## Alternatives considered
-
-- An LLM task classifier would introduce latency, cost, nondeterminism, and a new prompt-data path.
-- A broad text-only rule would admit date, entity, numeric, and instruction changes that often
-  require different answers.
-- A client-declared safe category could be forged. Trusted classification must be derived on the
-  server and remain default-deny until that derivation has its own evidence.
-
-This foundation intentionally yields zero production semantic hits. It is an explicit safety
-boundary, not an estimate of eventual cache coverage.
+- Duplicating response bodies in Qdrant would widen retention and consistency risk, so vectors reference the exact Redis entry.
+- A broad text rule or client-declared safe category would allow changed entities, negation, freshness, or instructions; eligibility stays server-derived and narrow.
+- Qdrant payload filters reduce candidate exposure, while a second payload and Redis-scope check guards against malformed or compromised results.
+- Qdrant has no authentication in local Compose. A deployment needs private network access and an explicit service security decision.

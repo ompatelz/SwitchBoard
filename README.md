@@ -8,7 +8,7 @@ LLM gateways can make routing and caching look simple while hiding difficult cor
 
 The project is a learning-focused, portfolio-grade backend and ML-systems implementation. Claims will be tied to reproducible tests and experiments rather than aspirational benchmark numbers.
 
-## Current scope: Phase 2 acceptance gate
+## Current scope: gateway reliability and guarded semantic fixture
 
 Phase 0 and Phase 1 are merged. This branch adds bounded mock-provider reliability while
 preserving the runnable two-service foundation:
@@ -89,11 +89,11 @@ Each worker permits at most 32 active upstream calls or streams by default. A fu
 metrics with fixed, non-sensitive labels. See [ADR 0004](docs/adr/0004-rate-concurrency-metrics.md)
 for window, cleanup, and metric semantics. Token quotas and a dashboard remain deferred.
 
-## Explicit non-goals for Phase 2
+## Current limits
 
-Phase 2 does **not** include:
+The current work does **not** include:
 
-- PostgreSQL, Qdrant, semantic caching, or learned model routing;
+- PostgreSQL, learned model routing, or semantic reuse of real provider responses;
 - production key administration, token quotas, or real paid providers;
 - a dashboard, Kubernetes, Kafka, or paid-provider integration; or
 - real-provider performance, cost-saving, or production-readiness claims.
@@ -256,8 +256,11 @@ application does not silently load `.env` files. Never commit `.env` or real cre
 
 The isolated CPU [embedding service](docs/embedding-service.md) can be built with the Compose
 `embedding` profile. Its pinned ONNX model is downloaded during image build and verified at startup.
-It is not connected to the gateway or semantic cache yet. The usual gateway request flow is
-unchanged. The service is published only on host loopback port 8003 for local checks.
+With `SWITCHBOARD_SEMANTIC_CACHE_ENABLED=true` and the `semantic` Compose profile, the gateway
+uses the worker and Qdrant only for the reviewed `static-definition-fixture-v1` model. The default
+is off. Exact Redis lookup remains first, and embedding or Qdrant failure falls through to the
+provider. The worker and Qdrant ports bind to host loopback for local checks. See the
+[semantic cache design](docs/semantic-cache-design.md).
 
 ## Phase 2 measurements and fault injection
 

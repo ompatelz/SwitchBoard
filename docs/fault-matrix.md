@@ -25,10 +25,20 @@ sockets; the Redis concurrency tests use a real Redis 7.4 container.
 | Circuit open, half-open, failed and successful recovery | `test_breaker_transitions_with_fake_clock`, `test_breaker_cancelled_probe_releases_slot` | Deterministic local transitions and one probe slot. |
 | Shutdown during in-flight work | `test_graceful_shutdown_waits_for_inflight_stream_then_cleans_up`, `test_lifespan_creates_and_closes_one_shared_client` | Uvicorn waits for the active stream; disconnect closes it and lifespan closes the shared HTTP client. |
 
+## Guarded semantic fixture checks
+
+`tests/integration/test_semantic_gateway.py` checks exact-first order, a compatible fixture hit,
+cross-tenant forged-reference rejection, below-threshold bypass, embedding and Qdrant outage
+fallback, streaming and ordinary-model bypass, and lifespan cleanup. The opt-in
+`tests/integration/test_semantic_qdrant.py` runs against real Qdrant to check tenant, version,
+subject, schema, expiry, and concurrent tie behavior. These are isolation and failure checks,
+not a measured answer-quality gate.
+
 The tests also check that authentication failure makes no upstream/cache request, input changes
 cannot produce an incorrect exact hit, and API keys/prompts do not enter metric labels. Redis
 `aclose()` is asserted in the tenant tests. Semaphore gauges return to zero after cancellation and
-closure. The application does not create background task workers; Uvicorn owns its ASGI tasks.
+closure. The optional semantic cache creates one lifespan-owned expiry-pruning task; Uvicorn owns
+the request ASGI tasks.
 
 The slow-consumer test proves demand-driven iteration at the gateway generator boundary. It does
 not measure kernel TCP-buffer size or prove a particular socket backpressure threshold. The

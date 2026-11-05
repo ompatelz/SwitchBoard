@@ -39,11 +39,12 @@ completion callback releases the permit. This prevents oversubscription after ab
 Shutdown waits up to 15 seconds for pending calls. A permanently stuck native call still requires
 process termination; Python cannot safely kill one running thread.
 
-`EmbeddingClient` is a typed, pooled HTTPX client intended for the gateway's future lifespan. It
+`EmbeddingClient` is a typed, pooled HTTPX client owned by the gateway lifespan when semantic
+reuse is enabled. It
 configures connect/read/write/pool timeouts of 1/20/2/1 seconds and at most eight connections. It
 rejects transport failures or incompatible model, revision, dimension, count, and normalization
-metadata as `EmbeddingUnavailable`. Cancellation propagates. It is **not connected to the gateway**
-in this slice. No prompt or vector is written to metrics or logs by this service. The worker has no
+metadata as `EmbeddingUnavailable`. Cancellation propagates. No prompt or vector is written to
+metrics or logs by this service. The worker has no
 public authentication boundary: keep its network private; Compose publishes its port only on host
 loopback for local testing. A future deployment must restrict service-to-service access.
 
@@ -73,7 +74,9 @@ docker compose --profile embedding -f deploy/compose.yaml down --timeout 15
 ```
 
 The embedding service uses a separate image and the `embedding` profile. Normal gateway Compose
-behavior remains unchanged. The gateway does not depend on worker readiness yet. A cold image build
+behavior remains unchanged when semantic reuse is disabled. Enabling semantic reuse adds the worker
+and Qdrant to the gateway lifespan; failure of either lookup path falls through to the provider.
+A cold image build
 downloads the locked Python dependencies and pinned model; startup verifies the files and loads the
 ONNX session. If readiness stays 503, check the worker startup log for a model load error and verify
 the pinned files and manifest. The service deliberately does not expose prompt text in an error.
