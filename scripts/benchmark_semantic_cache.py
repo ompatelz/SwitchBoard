@@ -8,6 +8,7 @@ import platform
 import statistics
 import subprocess
 import time
+import uuid
 from pathlib import Path
 
 import httpx
@@ -30,6 +31,7 @@ def main() -> None:
     parser.add_argument("--gateway", default="http://127.0.0.1:8000")
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--requests", type=int, default=10)
+    parser.add_argument("--workload-id", default=uuid.uuid4().hex)
     parser.add_argument("--output", type=Path, default=Path("docs/semantic-benchmark-results.json"))
     args = parser.parse_args()
     key = os.environ["SWITCHBOARD_API_KEY"]
@@ -46,7 +48,7 @@ def main() -> None:
         for run in range(args.runs):
             for index in range(args.requests):
                 for case, model, prompt in (
-                    ("provider", "mock-v1", f"Uncached fixture request {run}-{index}"),
+                    ("provider", "mock-v1", f"Uncached fixture {args.workload_id} {run}-{index}"),
                     ("exact", "static-definition-fixture-v1", "What is a stack?"),
                     ("semantic", "static-definition-fixture-v1", "Define a stack?"),
                 ):
@@ -64,6 +66,7 @@ def main() -> None:
         "workload": "one synthetic tenant, one Uvicorn worker, sequential buffered requests",
         "runs": args.runs,
         "requests_per_case_per_run": args.requests,
+        "workload_id": args.workload_id,
         "host": {
             "system": platform.system(),
             "machine": platform.machine(),
