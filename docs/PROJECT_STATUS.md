@@ -4,8 +4,16 @@
 
 - **Workstream:** Guarded semantic cache and quality evaluation
 - **Active slice:** Semantic eligibility and evaluation foundation
-- **State:** In progress on `codex/guarded-semantic-cache`; no semantic lookup is connected to the gateway yet.
+- **State:** Eligibility and evaluation foundation implemented and verified locally; awaiting the embedding-service slice. No semantic lookup is connected to the gateway.
 - **Updated:** 2026-11-05 (Asia/Calcutta)
+
+## Semantic eligibility and evaluation foundation
+
+- Added a pure default-deny policy with finite bypass reasons, server-derived tenant/model/provider/version scope, and a separate successful-response storage gate. The live request path is unchanged; `mock-v1` remains unsuitable for semantic reuse because its fixture answer depends on the exact prompt.
+- Added 20 synthetic labeled pairs: ten calibration and ten held-out, each with one positive and nine distinct hard-negative categories. Strict loading rejects malformed records, duplicate IDs, and request or group overlap across partitions. No embedding, threshold, vector search, or quality measurement has run.
+- Locked dependency installation succeeded in the isolated feature worktree. Before this implementation, lint, formatting, strict typing, and the ordinary baseline suite passed with **115 passed, 4 opt-in skips**. The first restricted suite stalled at an in-process HTTP test; the completed run used the normal test environment.
+- After implementation: Ruff lint passed; formatting check covered **55 files**; strict mypy passed over **40 source files**; full pytest reported **141 passed, 4 opt-in skips**; and `uv build` produced a wheel and source archive. The first archive accidentally included a temporary tool cache; after moving that cache outside the source tree, the rebuilt source archive was **147,365 bytes**. No live Redis, Docker, embedding service, or Qdrant check was performed for this slice.
+- Design, labeling, split, limitations, and the safety decision are recorded in [the semantic cache design](semantic-cache-design.md), [evaluation methodology](evaluation-methodology.md), and [ADR 0005](adr/0005-semantic-reuse-eligibility.md).
 
 ## Completed capabilities
 
@@ -407,6 +415,6 @@ Phase 0D clean-start verification:
 - No deployment target exists, so CD remains intentionally absent.
 - Phase 2 has no deployment target yet.
 
-## Next subphase
+## Next capability
 
-Phase 2D is the final acceptance subphase. Stop after its local gate, push, and unmerged PR.
+Build the isolated local embedding service only after the owner says “continue.”
