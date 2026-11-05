@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from switchboard.semantic_evaluation import load_prompt_pairs
+from switchboard.semantic_policy import static_definition_subject
 
 DATASET = Path(__file__).resolve().parents[2] / "evaluation" / "semantic_pairs_v1.jsonl"
 
@@ -34,6 +35,11 @@ def test_dataset_is_deterministic_and_has_hard_negatives_in_each_split() -> None
             "conversation_context",
             "vocabulary_overlap",
         }
+    assert all(
+        static_definition_subject(request) is None
+        for pair in pairs
+        for request in (pair.source, pair.target)
+    )
 
 
 @pytest.mark.parametrize(

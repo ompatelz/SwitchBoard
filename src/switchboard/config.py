@@ -37,6 +37,11 @@ class GatewaySettings(BaseModel):
     upstream_read_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
     upstream_write_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     upstream_pool_timeout_seconds: float = Field(default=1.0, gt=0, le=30)
+    semantic_cache_enabled: bool = False
+    semantic_similarity_threshold: float = Field(default=0.98, ge=0, le=1)
+    semantic_candidate_count: int = Field(default=3, ge=1, le=20)
+    embedding_service_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:8003")
+    qdrant_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:6333")
 
     @model_validator(mode="after")
     def validate_credentials(self) -> Self:
@@ -105,5 +110,14 @@ class GatewaySettings(BaseModel):
                 "upstream_pool_timeout_seconds": os.getenv(
                     "SWITCHBOARD_UPSTREAM_POOL_TIMEOUT_SECONDS", "1.0"
                 ),
+                "semantic_cache_enabled": os.getenv("SWITCHBOARD_SEMANTIC_CACHE_ENABLED", "false"),
+                "semantic_similarity_threshold": os.getenv(
+                    "SWITCHBOARD_SEMANTIC_SIMILARITY_THRESHOLD", "0.98"
+                ),
+                "semantic_candidate_count": os.getenv("SWITCHBOARD_SEMANTIC_CANDIDATE_COUNT", "3"),
+                "embedding_service_url": os.getenv(
+                    "SWITCHBOARD_EMBEDDING_SERVICE_URL", "http://127.0.0.1:8003"
+                ),
+                "qdrant_url": os.getenv("SWITCHBOARD_QDRANT_URL", "http://127.0.0.1:6333"),
             }
         )

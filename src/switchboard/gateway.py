@@ -1,8 +1,10 @@
 """Minimal Switchboard gateway application and upstream lifecycle."""
 
+import asyncio
 import hashlib
+import time
 from collections.abc import AsyncGenerator, AsyncIterator
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from typing import Annotated, Literal, cast
 
 import httpx
@@ -27,6 +29,8 @@ from switchboard.contracts import (
     HealthResponse,
     ReadinessResponse,
 )
+from switchboard.embedding_client import EmbeddingClient, EmbeddingClientSettings
+from switchboard.embedding_model import MODEL_REVISION
 from switchboard.exact_cache import AsyncCacheClient, ExactCache
 from switchboard.metrics import GatewayMetrics, RequestMetricsMiddleware
 from switchboard.provider import (
@@ -51,6 +55,13 @@ from switchboard.reliability import (
     RetryPolicy,
 )
 from switchboard.request_ids import RequestIdMiddleware
+from switchboard.semantic_cache import SemanticCache, SemanticLookupResult
+from switchboard.semantic_policy import (
+    STATIC_FIXTURE_MODEL,
+    SemanticEligibilityContext,
+    static_definition_subject,
+)
+from switchboard.semantic_vectors import QdrantRepository, QdrantUnavailable
 
 ErrorType = Literal[
     "invalid_request_error", "provider_error", "authentication_error", "rate_limit_error"
@@ -102,6 +113,32 @@ def get_exact_cache(request: Request) -> ExactCache | None:
 
 def get_rate_limiter(request: Request) -> FixedWindowRateLimiter:
     return cast(FixedWindowRateLimiter, request.app.state.rate_limiter)
+
+
+def get_semantic_cache(request: Request) -> SemanticCache | None:
+    return cast(SemanticCache | None, request.app.state.semantic_cache)
+
+
+def _semantic_context(
+    tenant: TenantIdentity,
+    request_body: ChatCompletionRequest,
+    *,
+    provider_policy: str,
+    exact_available: bool,
+) -> SemanticEligibilityContext:
+    approved = (
+        request_body.model == STATIC_FIXTURE_MODEL
+        and static_definition_subject(request_body) is not None
+    )
+    return SemanticEligibilityContext(
+        tenant=tenant,
+        provider_policy=provider_policy,
+        embedding_model_version=MODEL_REVISION,
+        supported_model=STATIC_FIXTURE_MODEL,
+        trusted_static_definition=approved,
+        provider_compatible=exact_available,
+        sensitive_input=not approved,
+    )
 
 
 def request_id_from(request: Request) -> str:
@@ -196,11 +233,27 @@ async def stream_provider_events(
         await provider_stream.aclose()
 
 
+async def _prune_expired_vectors(vectors: QdrantRepository) -> None:
+    """Periodically delete expired vector metadata without blocking requests."""
+    while True:
+        with suppress(QdrantUnavailable):
+            await vectors.prune_expired(now=int(time.time()))
+        await asyncio.sleep(3600)
+
+
+async def _stop_task(task: asyncio.Task[None]) -> None:
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+
 def create_app(
     settings: GatewaySettings | None = None,
     *,
     transport: httpx.AsyncBaseTransport | None = None,
     redis_client: AsyncCacheClient | None = None,
+    embedding_transport: httpx.AsyncBaseTransport | None = None,
+    qdrant_transport: httpx.AsyncBaseTransport | None = None,
 ) -> FastAPI:
     """Create an isolated gateway application instance."""
     resolved_settings = settings or GatewaySettings.from_env()
@@ -287,6 +340,37 @@ def create_app(
                 if secondary_name is None
                 else None
             )
+            application.state.semantic_cache = None
+            if resolved_settings.semantic_cache_enabled and secondary_name is None:
+                embedder = await stack.enter_async_context(
+                    EmbeddingClient(
+                        EmbeddingClientSettings(
+                            base_url=str(resolved_settings.embedding_service_url)
+                        ),
+                        transport=embedding_transport,
+                    )
+                )
+                vector_client = await stack.enter_async_context(
+                    httpx.AsyncClient(
+                        base_url=str(resolved_settings.qdrant_url),
+                        timeout=httpx.Timeout(connect=1.0, read=3.0, write=2.0, pool=1.0),
+                        limits=httpx.Limits(max_connections=8),
+                        transport=qdrant_transport,
+                    )
+                )
+                vectors = QdrantRepository(vector_client)
+                application.state.semantic_cache = SemanticCache(
+                    embedder=embedder,
+                    vectors=vectors,
+                    exact=cast(ExactCache, application.state.exact_cache),
+                    metrics=metrics,
+                    threshold=resolved_settings.semantic_similarity_threshold,
+                    candidate_count=resolved_settings.semantic_candidate_count,
+                    ttl_seconds=resolved_settings.cache_ttl_seconds,
+                )
+                stack.push_async_callback(
+                    _stop_task, asyncio.create_task(_prune_expired_vectors(vectors))
+                )
             yield
 
     application = FastAPI(
@@ -397,6 +481,7 @@ def create_app(
         limiter: Annotated[FixedWindowRateLimiter, Depends(get_rate_limiter)],
         provider: Annotated[ChatProvider, Depends(get_chat_provider)],
         cache: Annotated[ExactCache | None, Depends(get_exact_cache)],
+        semantic: Annotated[SemanticCache | None, Depends(get_semantic_cache)],
     ) -> ChatCompletionResponse | StreamingResponse:
         """Validate, correlate, and forward one buffered or streaming completion."""
         try:
@@ -423,19 +508,52 @@ def create_app(
             response.headers[key] = value
         try:
             if not request_body.stream:
+                semantic_lookup: SemanticLookupResult | None = None
+                semantic_context: SemanticEligibilityContext | None = None
                 if cache is not None:
                     cached = await cache.lookup(tenant, request_body)
                     if cached is not None:
                         return cached
                 else:
                     metrics.cache.labels(result="bypass").inc()
+                if semantic is not None:
+                    semantic_context = _semantic_context(
+                        tenant,
+                        request_body,
+                        provider_policy=provider_policy,
+                        exact_available=cache is not None,
+                    )
+                    semantic_lookup = await semantic.lookup(request_body, semantic_context)
+                    if semantic_lookup.response is not None:
+                        response.headers["X-Switchboard-Cache"] = "semantic"
+                        response.headers["X-Switchboard-Usage-Status"] = "source-response"
+                        return semantic_lookup.response
                 completion = await provider.complete(
                     request_body, request_id=request_id_from(request)
                 )
                 if cache is not None:
-                    await cache.store(tenant, request_body, completion)
+                    reference = await cache.store(tenant, request_body, completion)
+                    if semantic is not None and semantic_lookup is not None and semantic_context:
+                        await semantic.store(
+                            tenant,
+                            request_body,
+                            completion,
+                            semantic_context,
+                            semantic_lookup,
+                            reference,
+                        )
                 return completion
             metrics.cache.labels(result="bypass").inc()
+            if semantic is not None:
+                await semantic.lookup(
+                    request_body,
+                    _semantic_context(
+                        tenant,
+                        request_body,
+                        provider_policy=provider_policy,
+                        exact_available=cache is not None,
+                    ),
+                )
             provider_stream = await provider.open_stream(
                 request_body,
                 request_id=request_id_from(request),

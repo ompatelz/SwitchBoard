@@ -1,4 +1,4 @@
-"""Pure, default-deny policy for a future guarded semantic cache."""
+"""Pure, default-deny policy for guarded semantic reuse."""
 
 import re
 from dataclasses import dataclass
@@ -15,6 +15,24 @@ _UNSAFE_TERMS = re.compile(
     r"not|never|without|except|different|versus|vs|output|format|json|table)\b",
     re.IGNORECASE | re.ASCII,
 )
+STATIC_FIXTURE_MODEL = "static-definition-fixture-v1"
+STATIC_DEFINITIONS = {
+    "hash table": "A hash table stores key-value pairs using a hash function.",
+    "heap": "A heap is a tree-based data structure ordered by a heap property.",
+    "stack": "A stack is a last-in, first-out data structure.",
+}
+
+
+def static_definition_subject(request: ChatCompletionRequest) -> str | None:
+    """Return only a small server-reviewed public fixture subject."""
+    if len(request.messages) != 1 or request.messages[0].role != "user":
+        return None
+    prompt = request.messages[0].content
+    if not _STATIC_DEFINITION.fullmatch(prompt) or _UNSAFE_TERMS.search(prompt):
+        return None
+    subject = prompt.removeprefix("What is ").removeprefix("Define ").removesuffix("?")
+    subject = subject.removeprefix("a ").removeprefix("an ")
+    return subject if subject in STATIC_DEFINITIONS else None
 
 
 class EligibilityReason(StrEnum):
@@ -90,8 +108,7 @@ def evaluate_lookup(
         return EligibilityDecision(EligibilityReason.UNSUPPORTED_MODEL)
     if len(request.messages) != 1 or request.messages[0].role != "user":
         return EligibilityDecision(EligibilityReason.MESSAGE_SHAPE)
-    prompt = request.messages[0].content
-    if not _STATIC_DEFINITION.fullmatch(prompt) or _UNSAFE_TERMS.search(prompt):
+    if static_definition_subject(request) is None:
         return EligibilityDecision(EligibilityReason.UNSAFE_PROMPT)
     return EligibilityDecision(
         EligibilityReason.ELIGIBLE,

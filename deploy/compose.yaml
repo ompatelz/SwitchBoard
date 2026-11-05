@@ -53,6 +53,11 @@ services:
       SWITCHBOARD_UPSTREAM_READ_TIMEOUT_SECONDS: "10.0"
       SWITCHBOARD_UPSTREAM_WRITE_TIMEOUT_SECONDS: "2.0"
       SWITCHBOARD_UPSTREAM_POOL_TIMEOUT_SECONDS: "1.0"
+      SWITCHBOARD_SEMANTIC_CACHE_ENABLED: ${SWITCHBOARD_SEMANTIC_CACHE_ENABLED:-false}
+      SWITCHBOARD_EMBEDDING_SERVICE_URL: http://embedding-worker:8003
+      SWITCHBOARD_QDRANT_URL: http://qdrant:6333
+      SWITCHBOARD_SEMANTIC_SIMILARITY_THRESHOLD: ${SWITCHBOARD_SEMANTIC_SIMILARITY_THRESHOLD:-0.98}
+      SWITCHBOARD_SEMANTIC_CANDIDATE_COUNT: ${SWITCHBOARD_SEMANTIC_CANDIDATE_COUNT:-3}
     depends_on:
       mock-provider:
         condition: service_healthy
@@ -141,3 +146,10 @@ services:
       timeout: 3s
       retries: 20
       start_period: 60s
+
+  qdrant:
+    image: qdrant/qdrant:v1.20.0
+    restart: "no"
+    profiles: [semantic]
+    ports:
+      - "127.0.0.1:6333:6333"

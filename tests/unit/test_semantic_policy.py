@@ -11,6 +11,7 @@ from switchboard.semantic_policy import (
     SemanticEligibilityContext,
     evaluate_lookup,
     evaluate_storage,
+    static_definition_subject,
 )
 
 
@@ -20,7 +21,7 @@ def request(
     return ChatCompletionRequest.model_validate(
         {
             "model": "evaluation-model-v1",
-            "messages": messages or [{"role": "user", "content": "What is a queue?"}],
+            "messages": messages or [{"role": "user", "content": "What is a stack?"}],
             **overrides,
         }
     )
@@ -46,7 +47,7 @@ def response(**overrides: object) -> ChatCompletionResponse:
             "id": "fixture",
             "created": 1,
             "model": "evaluation-model-v1",
-            "choices": [{"message": {"content": "A queue is first in, first out."}}],
+            "choices": [{"message": {"content": "A stack is last in, first out."}}],
             "usage": {"prompt_tokens": 5, "completion_tokens": 8, "total_tokens": 13},
             **overrides,
         }
@@ -161,3 +162,20 @@ def test_scope_is_immutable() -> None:
     scope = evaluate_lookup(request(), context()).scope
     assert scope is not None
     assert replace(scope, embedding_model_version="next-version") != scope
+
+
+def test_only_reviewed_fixture_subjects_are_approved() -> None:
+    assert static_definition_subject(request()) == "stack"
+    assert (
+        static_definition_subject(request([{"role": "user", "content": "Define a stack?"}]))
+        == "stack"
+    )
+    assert (
+        static_definition_subject(request([{"role": "user", "content": "What is a bank?"}])) is None
+    )
+    assert (
+        static_definition_subject(
+            request([{"role": "user", "content": "What is the latest queue?"}])
+        )
+        is None
+    )

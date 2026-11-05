@@ -6,6 +6,7 @@ from switchboard.mock_provider import (
     MockGenerationRequest,
     build_mock_chat_completion,
     build_mock_response,
+    build_mock_stream_chunks,
 )
 
 
@@ -45,3 +46,21 @@ def test_chat_completion_fixture_is_deterministic_and_openai_shaped() -> None:
     assert first.choices[0].finish_reason == "stop"
     assert first.usage.prompt_tokens == 5
     assert first.usage.total_tokens == (first.usage.prompt_tokens + first.usage.completion_tokens)
+
+
+def test_static_definition_fixture_answers_match_for_reviewed_paraphrases() -> None:
+    source = ChatCompletionRequest(
+        model="static-definition-fixture-v1",
+        messages=[ChatMessage(role="user", content="What is a stack?")],
+    )
+    target = ChatCompletionRequest(
+        model="static-definition-fixture-v1",
+        messages=[ChatMessage(role="user", content="Define a stack?")],
+    )
+    first = build_mock_chat_completion(source)
+    second = build_mock_chat_completion(target)
+    assert first.choices[0].message.content == second.choices[0].message.content
+    streamed = "".join(
+        chunk.choices[0].delta.content or "" for chunk in build_mock_stream_chunks(target)
+    )
+    assert streamed == second.choices[0].message.content
