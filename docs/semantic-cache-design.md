@@ -23,13 +23,22 @@ code; bypasses have no scope and need no embedding. No raw prompt or answer is p
 
 `SemanticScope` carries authenticated tenant ID, requested model, server-selected provider policy,
 embedding-model version, semantic-policy version, and semantic-cache schema version. The embedding
-version is a required input placeholder: no model has been selected or loaded. Every field must be
+version is a required input; the pinned worker model is now selected, but the gateway has not loaded
+or called it. Every field must be
 included in future vector filtering and response-reference compatibility checks. Client fields
 cannot override tenant or policy scope. The scope has no raw prompt or answer.
 
+## Isolated embedding capability
+
+The [embedding service](embedding-service.md) now exists as an optional Compose service. It owns
+the pinned local ONNX model, inference threads, bounded admission, and `/embed` contract. A typed
+HTTP client with explicit timeout categories exists for the next integration step, but the gateway
+does not instantiate it or send prompts. No semantic cache lookup is active. The model revision is
+fixed, so a later vector collection must reject embeddings made by any other revision.
+
 ## Future storage and failure boundaries
 
-The embedding service and Qdrant are deferred. Before connecting them, decide where response bodies
+Qdrant and gateway integration are deferred. Before connecting them, decide where response bodies
 live, set a common TTL and deletion rule for vectors and response references, and reject dangling or
 corrupt references. Search must apply server-controlled tenant and all version filters before
 candidate acceptance. Embedding or vector failure must bypass to the provider after a valid rate

@@ -220,6 +220,7 @@ patterns while targeting Switchboard's intentionally smaller contract.
 
 ## Docker Compose
 
+
 Docker Desktop must be running. Set the key variables above, then build and wait for health checks:
 
 ```powershell
@@ -250,6 +251,13 @@ digest map. Redis is exposed only on host loopback port 6380 for the opt-in inte
 `.env.example` documents provider, cache, auth, request controls, and timeout settings. Set them in the shell or
 through a process/container environment; the
 application does not silently load `.env` files. Never commit `.env` or real credentials.
+
+### Optional local embedding worker
+
+The isolated CPU [embedding service](docs/embedding-service.md) can be built with the Compose
+`embedding` profile. Its pinned ONNX model is downloaded during image build and verified at startup.
+It is not connected to the gateway or semantic cache yet. The usual gateway request flow is
+unchanged. The service is published only on host loopback port 8003 for local checks.
 
 ## Phase 2 measurements and fault injection
 

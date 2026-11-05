@@ -30,6 +30,8 @@ results out by risk category. For a zero denominator, report undefined rather th
 This tiny, intentionally hard dataset is a contract and regression seed, not a representative
 traffic sample. Its positive class is especially small, so any future precision or coverage estimate
 will have wide uncertainty. Synthetic labels need human review before a production quality claim.
-No model, threshold, score, false-positive measurement, benchmark, or quality improvement is claimed
-for this slice. Similarity measures vector direction; answer equivalence also depends on entities,
+The isolated worker now uses a pinned 384-dimensional, unit-normalized BGE-small ONNX export; see
+[its model record](embedding-service.md). The dataset has not been embedded or scored, and no
+threshold, false-positive measurement, benchmark, or quality improvement is claimed yet.
+Similarity measures vector direction; answer equivalence also depends on entities,
 numbers, negation, units, time, instructions, and context.

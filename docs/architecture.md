@@ -2,12 +2,12 @@
 
 ## Status and scope
 
-This document describes the merged Phase 0 foundation, accepted Phase 1 gateway MVP, and current
-Phase 2A–2D work. The
+This document describes the merged gateway and backend reliability capabilities, plus the optional
+isolated embedding worker. The
 broader product direction remains in [`BUILD_CONTRACT.md`](BUILD_CONTRACT.md); it is not an
 assertion that those systems already exist.
 
-## Current architecture: Phase 2C request controls over tenant auth and exact cache
+## Current architecture: gateway controls, exact cache, and optional embedding worker
 
 The completion route first receives a typed `TenantIdentity` through FastAPI dependency injection.
 An `ApiKeyAuthenticator` compares the incoming bearer key's SHA-256 digest with configured tenant
@@ -45,7 +45,9 @@ The Chat Completions request and response models live in the shared boundary-con
 The gateway depends on the small `ChatProvider` protocol; `ReliableProviders` composes named
 `HttpxMockProvider` adapters that borrow lifespan-managed clients. Redis holds exact cache entries
 and rate counters. There is no PostgreSQL, semantic cache, learned router, or representative
-evaluation workload.
+evaluation workload. An isolated FastAPI embedding worker is available through an opt-in Compose
+profile. It owns a pinned CPU ONNX model and bounded inference threads, but the gateway does not
+call it yet. See [embedding-service.md](embedding-service.md) for its contract and ownership.
 
 ```mermaid
 flowchart LR

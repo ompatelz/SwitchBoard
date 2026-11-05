@@ -3,9 +3,17 @@
 ## Current workstream
 
 - **Workstream:** Guarded semantic cache and quality evaluation
-- **Active slice:** Semantic eligibility and evaluation foundation
-- **State:** Eligibility and evaluation foundation implemented and verified locally; awaiting the embedding-service slice. No semantic lookup is connected to the gateway.
+- **Active slice:** Isolated local embedding service
+- **State:** Embedding worker implemented and verified locally and in Compose; awaiting tenant-filtered vector retrieval. No semantic lookup is connected to the gateway.
 - **Updated:** 2026-11-05 (Asia/Calcutta)
+
+## Isolated local embedding service
+
+- Added a dedicated CPU FastAPI worker with a FastEmbed ONNX session pinned to the Qdrant export revision `aa8f8b060edb00e03bfdd08813a2949946c8ba55`. Build-time download creates a SHA-256 manifest; startup verifies it and loads local files only. The model is not loaded in the gateway.
+- Added a strict 1–16 text batch contract, per-text and total character limits, 384-dimensional unit-vector validation, health/readiness endpoints, two-call inference admission bound, 15-second inference deadline, and cancellation cleanup that retains a permit until native work finishes. Added a typed pooled client with explicit connect/read/write/pool timeouts for later gateway integration.
+- Locked dependency resolution and installation passed. Ruff lint and formatting passed over **63 Python files**; strict mypy passed over **47 source files**; the full suite with the real pinned model reported **161 passed, 4 opt-in skips**. `uv lock --check`, package build, and import checks passed. The real-model test observed stable repeated vectors within `1e-5` per component and unit norm within `1e-4`.
+- The Compose embedding profile built both images; worker, gateway, mock provider, and Redis became healthy. A real loopback `/embed` call returned one normalized 384-dimensional vector with the pinned revision; a repeated call had zero observed component difference. The two opt-in real-Redis tests passed. Compose containers and network were removed afterward.
+- No gateway semantic lookup, Qdrant, threshold, vector storage, or quality measurement is present. The worker is an internal local service without its own caller authentication; keep its network private. See [the worker record](embedding-service.md) and [cache design](semantic-cache-design.md).
 
 ## Semantic eligibility and evaluation foundation
 
@@ -417,4 +425,4 @@ Phase 0D clean-start verification:
 
 ## Next capability
 
-Build the isolated local embedding service only after the owner says “continue.”
+Connect tenant-filtered vector retrieval and guarded semantic cache behavior only after the owner says “continue.”
