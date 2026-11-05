@@ -1,11 +1,17 @@
 # Project status
 
-## Current phase
+## Current workstream
 
-- **Phase:** 2 — Backend reliability, tenant isolation, exact caching, and request controls
-- **Subphase:** 2D — Fault-injection gate and local baseline measurements
-- **State:** Local acceptance gate passed on `codex/phase-2-backend-reliability`; review state is tracked on GitHub
-- **Updated:** 2026-11-04 (Asia/Calcutta)
+- **Workstream:** Guarded semantic cache and quality evaluation
+- **Active slice:** Semantic eligibility and evaluation foundation
+- **State:** In progress on `codex/guarded-semantic-cache`; no semantic lookup is connected to the gateway yet.
+- **Updated:** 2026-11-05 (Asia/Calcutta)
+
+## Completed capabilities
+
+- Validated text-only Chat Completions, streaming, and deterministic mock-provider handling.
+- Bounded provider reliability, tenant authentication, exact Redis caching, request controls, and fixed-label metrics. The backend-reliability pull request is merged into `main` at `52e2374`.
+- Fault-injection and local mock measurement evidence is preserved below; it does not establish real-provider quality or production performance.
 
 ## Phase 2D acceptance evidence
 
