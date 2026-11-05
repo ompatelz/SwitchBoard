@@ -38,7 +38,7 @@ class GatewaySettings(BaseModel):
     upstream_write_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     upstream_pool_timeout_seconds: float = Field(default=1.0, gt=0, le=30)
     semantic_cache_enabled: bool = False
-    semantic_similarity_threshold: float = Field(default=0.98, ge=0, le=1)
+    semantic_similarity_threshold: float = Field(default=0.94, ge=0, le=1)
     semantic_candidate_count: int = Field(default=3, ge=1, le=20)
     embedding_service_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:8003")
     qdrant_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:6333")
@@ -112,7 +112,7 @@ class GatewaySettings(BaseModel):
                 ),
                 "semantic_cache_enabled": os.getenv("SWITCHBOARD_SEMANTIC_CACHE_ENABLED", "false"),
                 "semantic_similarity_threshold": os.getenv(
-                    "SWITCHBOARD_SEMANTIC_SIMILARITY_THRESHOLD", "0.98"
+                    "SWITCHBOARD_SEMANTIC_SIMILARITY_THRESHOLD", "0.94"
                 ),
                 "semantic_candidate_count": os.getenv("SWITCHBOARD_SEMANTIC_CANDIDATE_COUNT", "3"),
                 "embedding_service_url": os.getenv(

@@ -12,13 +12,14 @@ SEMANTIC_CACHE_SCHEMA_VERSION = 1
 _STATIC_DEFINITION = re.compile(r"^(?:What is|Define) (?:a |an )?[a-z][a-z -]{2,80}\?$", re.ASCII)
 _UNSAFE_TERMS = re.compile(
     r"\b(?:current|today|now|latest|recent|new|price|weather|time|date|live|"
-    r"not|never|without|except|different|versus|vs|output|format|json|table)\b",
+    r"not|never|without|except|different|versus|vs|output|format|json)\b",
     re.IGNORECASE | re.ASCII,
 )
 STATIC_FIXTURE_MODEL = "static-definition-fixture-v1"
 STATIC_DEFINITIONS = {
     "hash table": "A hash table stores key-value pairs using a hash function.",
     "heap": "A heap is a tree-based data structure ordered by a heap property.",
+    "linked list": "A linked list is a sequence of nodes connected by references.",
     "stack": "A stack is a last-in, first-out data structure.",
 }
 

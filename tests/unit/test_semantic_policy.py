@@ -167,6 +167,10 @@ def test_scope_is_immutable() -> None:
 def test_only_reviewed_fixture_subjects_are_approved() -> None:
     assert static_definition_subject(request()) == "stack"
     assert (
+        static_definition_subject(request([{"role": "user", "content": "Define a hash table?"}]))
+        == "hash table"
+    )
+    assert (
         static_definition_subject(request([{"role": "user", "content": "Define a stack?"}]))
         == "stack"
     )
