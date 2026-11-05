@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Awaitable
 from typing import Protocol
 
@@ -14,7 +15,12 @@ from switchboard.auth import TenantIdentity
 from switchboard.contracts import ChatCompletionRequest, ChatCompletionResponse
 from switchboard.metrics import GatewayMetrics
 
-CACHE_SCHEMA_VERSION = 1
+CACHE_SCHEMA_VERSION = 2
+_REFERENCE_PATTERN = re.compile(r"switchboard:exact:v2:[0-9a-f]{64}\Z")
+
+
+def _tenant_digest(tenant: TenantIdentity) -> str:
+    return hashlib.sha256(tenant.tenant_id.encode("utf-8")).hexdigest()
 
 
 class AsyncCacheClient(Protocol):
@@ -88,7 +94,11 @@ class ExactCache:
             return None
         try:
             payload = json.loads(raw)
-            if payload["schema"] != CACHE_SCHEMA_VERSION:
+            if (
+                payload["schema"] != CACHE_SCHEMA_VERSION
+                or payload["tenant_digest"] != _tenant_digest(tenant)
+                or payload["provider_policy"] != self.provider_policy
+            ):
                 self._record("miss")
                 return None
             response = ChatCompletionResponse.model_validate(payload["response"])
@@ -106,10 +116,15 @@ class ExactCache:
         tenant: TenantIdentity,
         request: ChatCompletionRequest,
         response: ChatCompletionResponse,
-    ) -> None:
+    ) -> str | None:
         key = exact_cache_key(tenant, request, provider_policy=self.provider_policy)
         value = json.dumps(
-            {"schema": CACHE_SCHEMA_VERSION, "response": response.model_dump(mode="json")},
+            {
+                "schema": CACHE_SCHEMA_VERSION,
+                "tenant_digest": _tenant_digest(tenant),
+                "provider_policy": self.provider_policy,
+                "response": response.model_dump(mode="json"),
+            },
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -118,5 +133,36 @@ class ExactCache:
             await self.client.set(key, value, ex=self.ttl_seconds)
         except (RedisError, TimeoutError, OSError):
             self._record("error")
-            return
+            return None
         self._record("write")
+        return key
+
+    async def read_reference(
+        self, tenant: TenantIdentity, reference: str, *, model: str
+    ) -> ChatCompletionResponse | None:
+        """Recheck tenant and provider metadata before following a vector response reference."""
+        if not _REFERENCE_PATTERN.fullmatch(reference):
+            return None
+        try:
+            raw = await self.client.get(reference)
+            if raw is None:
+                return None
+            payload = json.loads(raw)
+            if (
+                payload["schema"] != CACHE_SCHEMA_VERSION
+                or payload["tenant_digest"] != _tenant_digest(tenant)
+                or payload["provider_policy"] != self.provider_policy
+            ):
+                return None
+            response = ChatCompletionResponse.model_validate(payload["response"])
+            return response if response.model == model else None
+        except (
+            RedisError,
+            TimeoutError,
+            OSError,
+            ValueError,
+            TypeError,
+            KeyError,
+            ValidationError,
+        ):
+            return None

@@ -122,6 +122,20 @@ may still succeed, while completions return 503 because request enforcement cann
 `/cachez` checks Redis health, but does not alone distinguish a healthy cache command from a
 healthy rate script. Investigate Redis connectivity and the gateway's bounded socket timeout.
 
+## Optional semantic lookup failures
+
+The exact Redis cache runs first. When semantic reuse is enabled, an embedding timeout, worker
+rejection, Qdrant error, missing or corrupt vector payload, below-threshold score, or dangling
+Redis reference causes a provider miss. Qdrant writes happen after the exact Redis write; a
+failed vector write does not change a successful provider response. Mandatory tenant and version
+filters plus response-reference validation prevent a vector from serving another tenant's body.
+Streaming and the ordinary prompt-derived mock model do not call the embedding worker. The
+gateway lifespan owns and closes the optional clients and stops its expiry-pruning task.
+The completed local fault run stopped the embedding worker and Qdrant in turn; each fresh eligible
+request returned provider HTTP 200 without a semantic-hit header. A Redis request-limit failure
+still fails closed before either semantic dependency is contacted. The fixture threshold and
+small held-out results do not justify broad answer-quality claims.
+
 ## Deterministic injection
 
 `mock_provider.create_app(failure_scenario=...)` supports `rate_limit`, `server_500`,

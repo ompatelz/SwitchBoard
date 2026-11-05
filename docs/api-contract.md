@@ -198,6 +198,17 @@ provider 429/500/503, malformed upstream data, partial streams, Redis loss, and 
 [benchmark](benchmark-results.md) measures the buffered mock path only. It does not extend the
 accepted Chat Completions fields or claim real-provider latency.
 
+## Optional semantic fixture
+
+`SWITCHBOARD_SEMANTIC_CACHE_ENABLED` defaults to false. When enabled, only the synthetic
+`static-definition-fixture-v1` model with reviewed static-definition subjects is eligible.
+An exact Redis hit precedes any embedding or vector lookup. A semantic hit retains the cached
+Chat Completion body and adds `X-Switchboard-Cache: semantic` and
+`X-Switchboard-Usage-Status: source-response`; token usage in that body belongs to the source
+response and does not measure work for the current request. Streaming and `mock-v1` bypass
+semantic lookup. Embedder or vector-store failure proceeds to the provider when request controls
+allow it. No quality or cost claim follows from a fixture hit.
+
 ## Timeouts and resource ownership
 
 Connect, read, write, and pool timeouts are separately configured with positive validated values.

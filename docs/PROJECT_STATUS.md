@@ -1,11 +1,47 @@
 # Project status
 
-## Current phase
+## Current workstream
 
-- **Phase:** 2 — Backend reliability, tenant isolation, exact caching, and request controls
-- **Subphase:** 2D — Fault-injection gate and local baseline measurements
-- **State:** Local acceptance gate passed on `codex/phase-2-backend-reliability`; review state is tracked on GitHub
-- **Updated:** 2026-11-04 (Asia/Calcutta)
+- **Workstream:** Guarded semantic cache and quality evaluation
+- **Active slice:** Calibration, adversarial validation, and release evidence
+- **State:** Local acceptance evidence complete for the narrow synthetic fixture; semantic lookup remains disabled by default. Broad or real-provider reuse lacks quality evidence.
+- **Updated:** 2026-11-05 (Asia/Calcutta)
+
+## Calibration, adversarial validation, and release evidence
+
+- Added a separate four-pair synthetic fixture split with disjoint calibration (`stack`, `linked list`) and held-out (`heap`, `hash table`) subjects. The pinned 384-dimensional BGE-small ONNX model and calibration-only threshold sweep selected `0.94` from 0.80–1.00 in 0.01 steps. Each partition had one accepted positive and one rejected changed-subject negative: observed precision **1/1**, false-positive rate **0/1**, coverage **1/2**, incorrect-reuse rate **0/2**. The negative is blocked by subject compatibility independently of score. All 20 broad hard-negative audit pairs bypass before embedding; no real-provider quality inference is possible. Raw scores and denominators are in [the run record](semantic-calibration-results.json).
+- Three sequential runs of ten synthetic requests per path on Windows x86-64, 20 logical CPUs, one gateway worker, local Docker: provider p50/p95 **6.795/9.361 ms**, exact hit **3.952/5.791 ms**, semantic hit **14.479/20.058 ms**, zero HTTP errors. The semantic fixture path was slower than the mock provider; no cost or throughput benefit is claimed. See [raw measurements](semantic-benchmark-results.json) and [method](benchmark-results.md).
+- A rebuilt Compose stack became healthy. Live worker-stop and Qdrant-stop probes each returned provider HTTP 200 for a fresh eligible request. The full suite with real Redis, Qdrant, pinned model, and E2E options enabled reported **180 passed**; Ruff lint and formatting passed over **73 files**, strict mypy passed over **55 files**, and lock check, all-group sync, wheel, source build, and package imports passed. The acceptance code measured was commit `31328ff`; a later documentation commit does not change these execution paths.
+- The result is limited to reviewed canned answers. The tiny fixture set has no same-subject negative that reaches the score gate and no statistical power for production precision. Semantic reuse stays off by default. See [evaluation methodology](evaluation-methodology.md), [design](semantic-cache-design.md), and [ADR 0007](adr/0007-fixture-threshold-and-quality-boundary.md).
+
+## Tenant-filtered vector retrieval and cache integration
+
+- Added an opt-in Qdrant repository with mandatory server-derived tenant, model, provider-policy, embedding-revision, cache-schema, semantic-policy, subject, and expiry filters. Returned payloads are checked again; tied scores have deterministic ordering. Expired vectors are excluded on reads and pruned at startup and hourly.
+- The gateway now runs exact Redis lookup before semantic eligibility, embedding, vector search, threshold check, and a separately scoped Redis response-reference read. Successful eligible provider results write their response once to Redis and store only a vector, metadata, expiry, and exact key in Qdrant. Exact-cache schema version 2 invalidates earlier entries. Embedding and Qdrant failures fall through to the provider; streaming and ordinary `mock-v1` bypass.
+- At completion of this earlier slice, live reuse was confined to `stack`, `heap`, and `hash table`, disjoint from the original labeled dataset. The then-default threshold `0.98` had not been calibrated. The stack paraphrase scored `0.949328`; a test-only `0.94` setting produced a same-tenant semantic hit, while a `0.95` setting rejected it. These were functional checks, not quality estimates. The later calibration evidence is recorded above.
+- Full ordinary suite: **170 passed, 7 opt-in skips**. Full suite with real Qdrant, Redis, and pinned model enabled: **175 passed, 2 E2E skips**; the focused opt-in run reported **16 passed**. The two live gateway/OpenAI SDK E2E tests passed separately. Ruff lint and format checks passed over **68 files**; strict mypy and `uv build` passed. Earlier live outage probes returned provider 200 when either the embedder or Qdrant was stopped; deterministic gateway tests cover those paths after the fixture correction. See [design](semantic-cache-design.md), [evaluation limits](evaluation-methodology.md), and [ADR 0006](adr/0006-tenant-filtered-semantic-references.md).
+
+## Isolated local embedding service
+
+- Added a dedicated CPU FastAPI worker with a FastEmbed ONNX session pinned to the Qdrant export revision `aa8f8b060edb00e03bfdd08813a2949946c8ba55`. Build-time download creates a SHA-256 manifest; startup verifies it and loads local files only. The model is not loaded in the gateway.
+- Added a strict 1–16 text batch contract, per-text and total character limits, 384-dimensional unit-vector validation, health/readiness endpoints, two-call inference admission bound, 15-second inference deadline, and cancellation cleanup that retains a permit until native work finishes. Added a typed pooled client with explicit connect/read/write/pool timeouts for later gateway integration.
+- Locked dependency resolution and installation passed. Ruff lint and formatting passed over **63 Python files**; strict mypy passed over **47 source files**; the full suite with the real pinned model reported **161 passed, 4 opt-in skips**. `uv lock --check`, package build, and import checks passed. The real-model test observed stable repeated vectors within `1e-5` per component and unit norm within `1e-4`.
+- The Compose embedding profile built both images; worker, gateway, mock provider, and Redis became healthy. A real loopback `/embed` call returned one normalized 384-dimensional vector with the pinned revision; a repeated call had zero observed component difference. The two opt-in real-Redis tests passed. Compose containers and network were removed afterward.
+- At completion of this earlier slice, no gateway semantic lookup, Qdrant, threshold, vector storage, or quality measurement was present. The worker is an internal local service without its own caller authentication; keep its network private. See [the worker record](embedding-service.md) and [cache design](semantic-cache-design.md).
+
+## Semantic eligibility and evaluation foundation
+
+- Added a pure default-deny policy with finite bypass reasons, server-derived tenant/model/provider/version scope, and a separate successful-response storage gate. At completion of this earlier slice, the live request path was unchanged; `mock-v1` remains unsuitable for semantic reuse because its fixture answer depends on the exact prompt.
+- Added 20 synthetic labeled pairs: ten calibration and ten held-out, each with one positive and nine distinct hard-negative categories. Strict loading rejects malformed records, duplicate IDs, and request or group overlap across partitions. No embedding, threshold, vector search, or quality measurement has run.
+- Locked dependency installation succeeded in the isolated feature worktree. Before this implementation, lint, formatting, strict typing, and the ordinary baseline suite passed with **115 passed, 4 opt-in skips**. The first restricted suite stalled at an in-process HTTP test; the completed run used the normal test environment.
+- After implementation: Ruff lint passed; formatting check covered **55 files**; strict mypy passed over **40 source files**; full pytest reported **141 passed, 4 opt-in skips**; and `uv build` produced a wheel and source archive. The first archive accidentally included a temporary tool cache; after moving that cache outside the source tree, the rebuilt source archive was **147,365 bytes**. No live Redis, Docker, embedding service, or Qdrant check was performed for this slice.
+- Design, labeling, split, limitations, and the safety decision are recorded in [the semantic cache design](semantic-cache-design.md), [evaluation methodology](evaluation-methodology.md), and [ADR 0005](adr/0005-semantic-reuse-eligibility.md).
+
+## Completed capabilities
+
+- Validated text-only Chat Completions, streaming, and deterministic mock-provider handling.
+- Bounded provider reliability, tenant authentication, exact Redis caching, request controls, and fixed-label metrics. The backend-reliability pull request is merged into `main` at `52e2374`.
+- Fault-injection and local mock measurement evidence is preserved below; it does not establish real-provider quality or production performance.
 
 ## Phase 2D acceptance evidence
 
@@ -401,6 +437,6 @@ Phase 0D clean-start verification:
 - No deployment target exists, so CD remains intentionally absent.
 - Phase 2 has no deployment target yet.
 
-## Next subphase
+## Next capability
 
-Phase 2D is the final acceptance subphase. Stop after its local gate, push, and unmerged PR.
+Connect tenant-filtered vector retrieval and guarded semantic cache behavior only after the owner says “continue.”

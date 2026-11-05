@@ -25,6 +25,11 @@ from switchboard.contracts import (
     HealthResponse,
 )
 from switchboard.request_ids import RequestIdMiddleware
+from switchboard.semantic_policy import (
+    STATIC_DEFINITIONS,
+    STATIC_FIXTURE_MODEL,
+    static_definition_subject,
+)
 
 Prompt = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4096)]
 Seed = Annotated[int, Field(ge=0, le=4_294_967_295)]
@@ -104,10 +109,19 @@ def build_mock_response(request: MockGenerationRequest) -> MockGenerationRespons
     )
 
 
+def _mock_chat_content(request: ChatCompletionRequest, digest: str) -> str:
+    subject = static_definition_subject(request) if request.model == STATIC_FIXTURE_MODEL else None
+    return (
+        STATIC_DEFINITIONS[subject]
+        if subject is not None
+        else f"Deterministic mock completion {digest[:16]}"
+    )
+
+
 def build_mock_chat_completion(request: ChatCompletionRequest) -> ChatCompletionResponse:
     """Build an OpenAI-shaped completion using only deterministic input data."""
     digest = _chat_request_digest(request)
-    content = f"Deterministic mock completion {digest[:16]}"
+    content = _mock_chat_content(request, digest)
 
     # These stable counts are fixtures for contract tests, not tokenizer output.
     prompt_tokens = sum(len(message.content.split()) for message in request.messages)
@@ -147,7 +161,7 @@ def build_mock_stream_chunks(request: ChatCompletionRequest) -> list[ChatComplet
     """Create deterministic chunks whose content matches non-streaming output."""
     digest = _chat_request_digest(request)
     completion_id = f"chatcmpl-mock-{digest[:24]}"
-    content = f"Deterministic mock completion {digest[:16]}"
+    content = _mock_chat_content(request, digest)
     content_parts = [content[:14], content[14:31], content[31:]]
 
     def chunk(

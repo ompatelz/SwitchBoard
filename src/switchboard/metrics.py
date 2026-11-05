@@ -76,6 +76,18 @@ class GatewayMetrics:
         self.cache = Counter(
             "switchboard_cache_operations_total", "Cache outcomes", ["result"], registry=registry
         )
+        self.semantic_eligibility = Counter(
+            "switchboard_semantic_eligibility_total",
+            "Bounded semantic eligibility decisions",
+            ["reason"],
+            registry=registry,
+        )
+        self.semantic_operations = Counter(
+            "switchboard_semantic_operations_total",
+            "Guarded semantic cache outcomes",
+            ["result"],
+            registry=registry,
+        )
         self.rate_rejections = Counter(
             "switchboard_rate_limit_rejections_total",
             "Tenant request-rate rejections",

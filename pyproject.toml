@@ -25,6 +25,10 @@ dependencies = [
 ]
 
 [dependency-groups]
+embedding = [
+  "fastembed>=0.7,<0.8",
+  "huggingface-hub>=0.35,<2",
+]
 dev = [
   "httpx2>=2,<3",
   "mypy>=1.15,<2",
@@ -42,6 +46,8 @@ filterwarnings = ["error"]
 markers = [
   "e2e: requires locally running gateway and mock-provider services",
   "redis: requires a running Redis service",
+  "embedding: requires the pinned local embedding model",
+  "qdrant: requires a running local Qdrant service",
 ]
 testpaths = ["tests"]
 

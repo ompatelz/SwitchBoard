@@ -53,6 +53,11 @@ services:
       SWITCHBOARD_UPSTREAM_READ_TIMEOUT_SECONDS: "10.0"
       SWITCHBOARD_UPSTREAM_WRITE_TIMEOUT_SECONDS: "2.0"
       SWITCHBOARD_UPSTREAM_POOL_TIMEOUT_SECONDS: "1.0"
+      SWITCHBOARD_SEMANTIC_CACHE_ENABLED: ${SWITCHBOARD_SEMANTIC_CACHE_ENABLED:-false}
+      SWITCHBOARD_EMBEDDING_SERVICE_URL: http://embedding-worker:8003
+      SWITCHBOARD_QDRANT_URL: http://qdrant:6333
+      SWITCHBOARD_SEMANTIC_SIMILARITY_THRESHOLD: ${SWITCHBOARD_SEMANTIC_SIMILARITY_THRESHOLD:-0.94}
+      SWITCHBOARD_SEMANTIC_CANDIDATE_COUNT: ${SWITCHBOARD_SEMANTIC_CANDIDATE_COUNT:-3}
     depends_on:
       mock-provider:
         condition: service_healthy
@@ -118,3 +123,33 @@ services:
       timeout: 2s
       retries: 20
       start_period: 5s
+
+  embedding-worker:
+    image: switchboard-embedding:guarded
+    init: true
+    restart: "no"
+    profiles: [embedding]
+    build:
+      context: ..
+      dockerfile: deploy/embedder.Dockerfile
+    ports:
+      - "127.0.0.1:8003:8003"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8003/readyz', timeout=3).read()
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 60s
+
+  qdrant:
+    image: qdrant/qdrant:v1.20.0
+    restart: "no"
+    profiles: [semantic]
+    ports:
+      - "127.0.0.1:6333:6333"
