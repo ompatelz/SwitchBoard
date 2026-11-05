@@ -118,3 +118,26 @@ services:
       timeout: 2s
       retries: 20
       start_period: 5s
+
+  embedding-worker:
+    image: switchboard-embedding:guarded
+    init: true
+    restart: "no"
+    profiles: [embedding]
+    build:
+      context: ..
+      dockerfile: deploy/embedder.Dockerfile
+    ports:
+      - "127.0.0.1:8003:8003"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8003/readyz', timeout=3).read()
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 60s

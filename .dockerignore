@@ -12,3 +12,4 @@ docs
 tests
 .env
 *.log
+.uv-cache
