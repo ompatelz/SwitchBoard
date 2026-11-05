@@ -34,6 +34,12 @@ fallback, streaming and ordinary-model bypass, and lifespan cleanup. The opt-in
 subject, schema, expiry, and concurrent tie behavior. These are isolation and failure checks,
 not a measured answer-quality gate.
 
+The final live run stopped the worker and Qdrant separately and observed provider HTTP 200 for
+fresh eligible fixture requests in both cases. The full suite with real Redis, Qdrant, pinned
+model, and gateway/SDK E2E options enabled reported **180 passed**. The fixture calibration
+accepted one positive and rejected one changed-subject negative in each split; the 20-pair broad
+audit bypassed all pairs before embedding. No same-subject negative entered the score gate.
+
 The tests also check that authentication failure makes no upstream/cache request, input changes
 cannot produce an incorrect exact hit, and API keys/prompts do not enter metric labels. Redis
 `aclose()` is asserted in the tenant tests. Semaphore gauges return to zero after cancellation and

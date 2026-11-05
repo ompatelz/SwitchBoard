@@ -262,6 +262,14 @@ is off. Exact Redis lookup remains first, and embedding or Qdrant failure falls 
 provider. The worker and Qdrant ports bind to host loopback for local checks. See the
 [semantic cache design](docs/semantic-cache-design.md).
 
+The fixture threshold is `0.94`, selected on synthetic calibration pairs and checked on distinct
+held-out fixture subjects. This does not establish safe reuse for real provider responses. Run the
+offline [calibration command](scripts/calibrate_semantic_cache.py) with the pinned model directory,
+or the [local path measurement](scripts/benchmark_semantic_cache.py) after starting the Compose
+`embedding` and `semantic` profiles with a synthetic development key. The [evaluation record](docs/evaluation-methodology.md)
+and [measurement record](docs/benchmark-results.md) give exact commands, denominators, and limits.
+The local semantic path was slower than the mock provider path; no savings are claimed.
+
 ## Phase 2 measurements and fault injection
 
 The checked-in benchmark uses real HTTP against the Compose mock provider, a cached gateway,

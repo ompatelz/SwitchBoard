@@ -72,3 +72,37 @@ Run `docker compose ... down` in a `finally` block if automating the sequence. T
 key is read from `SWITCHBOARD_API_KEY` and is never written to the data files. Results will vary
 with host load, Docker scheduling, client runtime, and Redis condition. The cache hit path avoids a
 mock upstream call; it does not make mock inference or any real model faster.
+
+## Guarded semantic fixture path measurement
+
+Measured on 2026-11-05 against acceptance code commit `31328ff` on Windows x86-64 with 20
+logical CPUs, Docker Desktop, one Uvicorn gateway worker, Redis, Qdrant, and the pinned local
+embedding worker. [`semantic-benchmark-results.json`](semantic-benchmark-results.json) contains
+all 90 client-observed durations. `scripts/benchmark_semantic_cache.py` made three sequential runs
+of ten buffered requests per case for one synthetic tenant. It warmed the static `stack` source
+before timing. Provider requests used unique `mock-v1` prompts and were exact-cache misses; exact
+requests reused the source prompt; semantic requests paraphrased it and verified the semantic-hit
+header. The workload ID prevents accidental provider-key warming across repeated script runs.
+Each duration spans HTTP POST through the complete response body; p50, p95, and p99 are nearest-rank
+percentiles. Requests were interleaved by case; these observations do not isolate component cost.
+
+| Local path | Requests | p50 ms | p95 ms | p99 ms | HTTP errors |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Provider, unique `mock-v1` requests | 30 | 6.795 | 9.361 | 10.786 | 0 |
+| Warmed exact Redis hit | 30 | 3.952 | 5.791 | 7.116 | 0 |
+| Guarded semantic fixture hit | 30 | 14.479 | 20.058 | 83.759 | 0 |
+
+The semantic path was slower than the deterministic mock provider on this host because it embeds
+each eligible request. These samples do not estimate real-provider latency, answer quality, token
+cost, fleet throughput, or savings. Reproduce after setting `SWITCHBOARD_API_KEY` to the synthetic
+key used in the Compose tenant digest and enabling both optional profiles:
+
+```powershell
+$env:SWITCHBOARD_SEMANTIC_CACHE_ENABLED = 'true'
+$env:SWITCHBOARD_RATE_LIMIT_REQUESTS = '1000'
+docker compose --profile embedding --profile semantic -f deploy/compose.yaml up --build --wait --wait-timeout 240
+uv run python scripts/benchmark_semantic_cache.py --runs 3 --requests 10
+docker compose --profile embedding --profile semantic -f deploy/compose.yaml down --timeout 15
+```
+
+The README shows how to set a development tenant digest; Compose requires it in the same shell.

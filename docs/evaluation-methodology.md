@@ -16,28 +16,37 @@ the loader rejects a group that crosses the split, duplicate IDs, malformed reco
 identical requests, and inconsistent category/label combinations. It returns records sorted by ID.
 The held-out examples must not guide model choice, prompt rules, or threshold selection.
 
-## Planned measurements
+## Fixture threshold selection and held-out check
 
-The worker and retrieval path now exist for a reviewed synthetic fixture, but the live `0.98`
-default and local-smoke `0.94` threshold are provisional. No threshold has been selected from
-labels. Fixture subjects `stack`, `heap`, and `hash table` are disjoint from both dataset
-partitions, preventing a demonstration prompt from leaking into calibration or held-out evidence.
-The fixture does not make the current dataset eligible for live reuse.
+The separate [fixture dataset](../evaluation/semantic_fixture_pairs_v1.jsonl) contains four
+synthetic pairs under the only live eligible model: one positive and one changed-subject negative
+in each partition. Calibration uses `stack` and `linked list`; held-out uses `heap` and `hash table`.
+Subjects do not cross partitions. These are fixed canned answers, not sampled provider responses.
 
-In the next slice, sweep thresholds using only calibration data.
-Choose a threshold from a declared false-positive risk budget, then freeze it before measuring on
-held-out data. Report the selected model/version, normalization, vector dimension, cosine formula,
-candidate count, compatibility rules, and every denominator. A false positive is an accepted
-negative pair; a false negative is a rejected positive pair. Precision is accepted positives divided
-by all accepted pairs. Coverage is accepted pairs divided by all eligible target pairs. Also report
-false-positive rate among negative pairs and incorrect reuse among all evaluated pairs. Break
-results out by risk category. For a zero denominator, report undefined rather than zero.
+`uv run python scripts/calibrate_semantic_cache.py --model-dir <pinned-model-directory>` verifies
+the pinned manifest, embeds the fixture prompts, and sweeps cosine thresholds from 0.80 to 1.00
+in 0.01 steps. Selection uses **calibration only**: minimize observed false positives, maximize
+accepted positives, then choose the highest threshold. The selected `0.94` is frozen before the
+held-out calculation. The [machine-readable run](semantic-calibration-results.json) records the
+model revision, 384 dimensions, normalization, candidate count 3, every score, host, run count,
+evaluated commit, denominators, and category counts. A false positive is an accepted negative; a
+false negative is a rejected positive. Precision is accepted positives divided by all accepted;
+false-positive rate is accepted negatives divided by all negatives; coverage is accepted pairs
+divided by eligible pairs; incorrect-reuse rate is accepted negatives divided by all pairs. A
+zero denominator is reported as `null`.
 
-This tiny, intentionally hard dataset is a contract and regression seed, not a representative
-traffic sample. Its positive class is especially small, so any future precision or coverage estimate
-will have wide uncertainty. Synthetic labels need human review before a production quality claim.
-The isolated worker now uses a pinned 384-dimensional, unit-normalized BGE-small ONNX export; see
-[its model record](embedding-service.md). The dataset has not been embedded or scored, and no
-threshold, false-positive measurement, benchmark, or quality improvement is claimed yet.
-Similarity measures vector direction; answer equivalence also depends on entities,
-numbers, negation, units, time, instructions, and context.
+| Partition | Pairs | Positives | Negatives | Accepted | False positives | Precision | Coverage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Calibration | 2 | 1 | 1 | 1 | 0 | 1/1 | 1/2 |
+| Held-out | 2 | 1 | 1 | 1 | 0 | 1/1 | 1/2 |
+
+Both changed-subject negatives are blocked by the subject gate even before score acceptance; the
+threshold has **no eligible same-subject negative** to distinguish. Both paraphrases were accepted
+and neither split had a false negative. The original 20-pair hard-negative dataset is audited by
+category: all 20 requests bypass before embedding under the live default-deny rule, including its
+two positives. Thus it measures policy coverage, not score quality. Precision 1/1 and false-positive
+rate 0/1 on the held-out fixture are observations with almost no statistical power. No
+real-provider quality, traffic coverage, or cost improvement is established. This is a negative
+result for broad semantic reuse; it stays disabled by default. Similarity measures vector
+direction, while answer equivalence also depends on entities, numbers, negation, units, time,
+instructions, and context. See [ADR 0007](adr/0007-fixture-threshold-and-quality-boundary.md).

@@ -131,6 +131,10 @@ failed vector write does not change a successful provider response. Mandatory te
 filters plus response-reference validation prevent a vector from serving another tenant's body.
 Streaming and the ordinary prompt-derived mock model do not call the embedding worker. The
 gateway lifespan owns and closes the optional clients and stops its expiry-pruning task.
+The completed local fault run stopped the embedding worker and Qdrant in turn; each fresh eligible
+request returned provider HTTP 200 without a semantic-hit header. A Redis request-limit failure
+still fails closed before either semantic dependency is contacted. The fixture threshold and
+small held-out results do not justify broad answer-quality claims.
 
 ## Deterministic injection
 

@@ -25,7 +25,8 @@ HTTP client. Circuit state remains process-local. See
 [`failure-model.md`](failure-model.md) and [ADR 0002](adr/0002-retry-fallback-circuit.md) for exact
 failure transitions, limits, and cancellation rules.
 
-The current system is an installable Python distribution containing two independent FastAPI/ASGI applications connected by one minimal readiness request:
+The installable Python distribution contains the gateway and mock-provider FastAPI applications,
+plus an optional isolated embedding application. Provider readiness uses one minimal request:
 
 ```text
 client -- GET /healthz --> gateway application
@@ -33,6 +34,8 @@ client -- GET /readyz --> gateway -- shared AsyncClient --> mock GET /healthz
 OpenAI SDK or HTTP client -- POST /v1/chat/completions --> gateway validation --> provider adapter
   --> shared AsyncClient --> mock POST /v1/chat/completions --> validated response
 client -- stream:true --> gateway preflight first SSE event --> async forwarding --> [DONE]
+eligible buffered miss --> embedding worker --> filtered Qdrant --> scoped Redis reference
+  --> semantic response or provider fallback
 
 test client -- GET /healthz --> mock-provider application
 test client -- POST /generate --> validation --> SHA-256 derivation --> mock response
@@ -55,12 +58,17 @@ flowchart LR
     G --> A[Authenticate tenant]
     A --> R[Redis atomic rate decision]
     R --> K[Exact cache if eligible]
-    K --> P[Local capacity and circuit]
+    K --> S[Optional eligibility and embedding]
+    S --> Q[Filtered Qdrant candidate]
+    Q -->|accepted reference| C2[Scoped Redis response]
+    Q -->|miss or failure| P[Local capacity and circuit]
     P --> H[Shared HTTPX pool]
     H --> M[Mock provider]
     L[Gateway lifespan] --> H
     L --> R
     L --> K
+    L --> S
+    L --> Q
     L --> P
     G --> T[Local metrics registry]
 ```
